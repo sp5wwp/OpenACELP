@@ -4,11 +4,14 @@
 #include <stdlib.h>
 
 //-----------------------------ACELP includes & defines------------------------------
-#define MAX_32  2147483647
-#define MIN_32 -2147483648
+#define MAX_32	 2147483647
+#define MIN_32	-2147483648
+#define HALF_32	 1073741824
 
-#define MAX_16 32767
-#define MIN_16 -32768
+#define MAX_16	 32767
+#define MIN_16	-32768
+#define HALF_16	 16384
+
 
 //Global consts
 #include "N_POW2.h"	//powers of 2 array
@@ -55,6 +58,12 @@ int16_t abs_s(int16_t val)
 int16_t add_s(int16_t a, int16_t b)
 {
 	return saturate((int32_t)a + (int32_t)b);
+}
+
+//subtraction with saturation
+int16_t sub(int16_t a, int16_t b)
+{  
+    return saturate((int32_t)a - (int32_t)b);
 }
 
 //calculate val1*val2, scaled
@@ -254,14 +263,102 @@ int32_t sub_shl16(int16_t val1, int16_t shift, int32_t val2)
 int16_t negate(int16_t val)
 {
 	if(val==MIN_16)
-		return MAX_16
+		return MAX_16;
 	else
 		return -val;
 }
 
+//bit shifts needed to normalize int32_t to range MIN_32..-HALF_32 and HALF_32..MAX_32
+int16_t norm_l(int32_t val)
+{
+	if(val == 0)
+	{
+		return 0;
+	}
+    else
+	{
+		if(val == -1)
+		{
+			return 31;
+		}
+		else
+		{
+			if(val < 0)
+				val = ~val;
+  
+  			int16_t rv=0;
+  
+			for(; val < HALF_32; rv++)
+			{
+				val <<= 1;
+			}
+			
+			return rv;
+		}
+	}
+}
+
+//bit shifts needed to normalize int16_t to range MIN_16..-HALF_16 and HALF_16..MAX_16
+int16_t norm_s(int16_t val)
+{
+	if(val == 0)
+	{
+		return 0;
+	}
+    else
+	{
+		if(val == -1)
+		{
+			return 15;
+		}
+		else
+		{
+			if(val < 0)
+				val = ~val;
+  
+  			int16_t rv=0;
+  
+			for(; val < HALF_16; rv++)
+			{
+				val <<= 1;
+			}
+			
+			return rv;
+		}
+	}
+}
+
+//variable normalisation of a 32 bit integer (val1)
+//val2 gives the maximum number of left shift to be done
+//val3 returns the actual number of left shift
+int32_t norm_v(int32_t val1, int16_t val2, int16_t *val3)
+{
+	int16_t shift = norm_l(val1);
+
+	if(sub(shift, val2) > 0)
+		shift = val2;
+	*val3 = shift;
+
+	return L_shl(val1, shift);
+}
+
+//store high part of val1 with a left shift of val2
+int16_t store_hi(int32_t val1, int16_t val2)
+{
+   static const int16_t SHR[8] = {16, 15, 14, 13, 12, 11, 10, 9};
+   
+   return extract_l(L_shr(val1, SHR[val2]));
+}
+
+//load the 16 bit val with a left shift of 16 into 32 bit output
+int32_t Load_sh16(int16_t val)
+{
+	return L_msu_shl(val, -32768, 0);
+}
+
 int main(void)
 {
-	int32_t val=add_shl16(1, 0);
+	int16_t val=norm_l(-2);
 	
 	printf("%ld, ovf=%d\n", val, ovf);
 	
