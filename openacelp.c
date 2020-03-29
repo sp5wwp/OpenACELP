@@ -343,7 +343,7 @@ int32_t norm_v(int32_t val1, int16_t val2, int16_t *val3)
 }
 
 //store high part of val1 with a left shift of val2
-int16_t store_hi(int32_t val1, int16_t val2)
+int16_t store_h(int32_t val1, int16_t val2)
 {
    static const int16_t SHR[8] = {16, 15, 14, 13, 12, 11, 10, 9};
    
@@ -351,7 +351,7 @@ int16_t store_hi(int32_t val1, int16_t val2)
 }
 
 //load the 16 bit val with a left shift of 16 into 32 bit output
-int32_t Load_sh16(int16_t val)
+int32_t Load_shl16(int16_t val)
 {
 	return L_msu_shl(val, -32768, 0);
 }
