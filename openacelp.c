@@ -36,8 +36,8 @@ int16_t saturate(int32_t val)
 	else if(val < MIN_16)
 	{
 		ovf = 1;
-    	return MIN_16;
-    }
+		return MIN_16;
+	}
 	else
 	{
 		ovf = 0;
@@ -62,8 +62,8 @@ int16_t add_s(int16_t a, int16_t b)
 
 //subtraction with saturation
 int16_t sub(int16_t a, int16_t b)
-{  
-    return saturate((int32_t)a - (int32_t)b);
+{
+	return saturate((int32_t)a - (int32_t)b);
 }
 
 //calculate val1*val2, scaled
@@ -80,7 +80,7 @@ int32_t L_shr(int32_t val1, int16_t val2);
 int32_t L_add_s(int32_t val1, int32_t val2)
 {
 	int64_t rv = val1 + val2;
-  
+
 	if(rv > MAX_32)
 	{
 		ovf = 1;
@@ -101,7 +101,7 @@ int32_t L_add_s(int32_t val1, int32_t val2)
 int32_t L_sub_s(int32_t val1, int32_t val2)
 {
 	int64_t rv = (int64_t)val1 - (int64_t)val2;
-  
+
 	if(rv > MAX_32)
 	{
 		ovf = 1;
@@ -250,13 +250,13 @@ int32_t add_shl16(int16_t val1, int32_t val2)
 //calculate shl(val1, shift)-val2
 int32_t sub_shl(int16_t val1, int16_t shift, int32_t val2)
 {
-     return L_mac(val1, N_POW2[shift], val2);
+	return L_mac(val1, N_POW2[shift], val2);
 }
 
 //calculate shl(val1, 16)-val2
 int32_t sub_shl16(int16_t val1, int16_t shift, int32_t val2)
 {
-     return L_mac_shl(val1, -32768, val2);
+	return L_mac_shl(val1, -32768, val2);
 }
 
 //calculate -val with saturation
@@ -275,7 +275,7 @@ int16_t norm_l(int32_t val)
 	{
 		return 0;
 	}
-    else
+	else
 	{
 		if(val == -1)
 		{
@@ -285,9 +285,9 @@ int16_t norm_l(int32_t val)
 		{
 			if(val < 0)
 				val = ~val;
-  
-  			int16_t rv=0;
-  
+
+			int16_t rv=0;
+
 			for(; val < HALF_32; rv++)
 			{
 				val <<= 1;
@@ -305,7 +305,7 @@ int16_t norm_s(int16_t val)
 	{
 		return 0;
 	}
-    else
+	else
 	{
 		if(val == -1)
 		{
@@ -315,9 +315,9 @@ int16_t norm_s(int16_t val)
 		{
 			if(val < 0)
 				val = ~val;
-  
-  			int16_t rv=0;
-  
+
+			int16_t rv=0;
+
 			for(; val < HALF_16; rv++)
 			{
 				val <<= 1;
@@ -345,15 +345,31 @@ int32_t norm_v(int32_t val1, int16_t val2, int16_t *val3)
 //store high part of val1 with a left shift of val2
 int16_t store_h(int32_t val1, int16_t val2)
 {
-   static const int16_t SHR[8] = {16, 15, 14, 13, 12, 11, 10, 9};
-   
-   return extract_l(L_shr(val1, SHR[val2]));
+	static const int16_t SHR[8] = {16, 15, 14, 13, 12, 11, 10, 9};
+
+	return extract_l(L_shr(val1, SHR[val2]));
 }
 
 //load the 16 bit val with a left shift of 16 into 32 bit output
 int32_t Load_shl16(int16_t val)
 {
 	return L_msu_shl(val, -32768, 0);
+}
+
+//----------------------------------Mid-level functions----------------------------------
+//innovative codebook search
+int16_t Innov_Codebook_Search(int16_t dn[], int16_t f[], int16_t h[], int16_t rr[][32],
+             int16_t cod[], int16_t y[], int16_t *sign, int16_t *shift_code)
+{
+	;
+}
+
+//LPC coefficients calculation
+//based on the Levison-Durbin algorithm
+//in double precision
+void LD_solver_32(int16_t Rh[], int16_t Rl[], int16_t A[])
+{
+	;
 }
 
 int main(void)
