@@ -72,6 +72,18 @@ int16_t mult(int16_t val1, int16_t val2)
 	return saturate(((int32_t)val1 * (int32_t)val2) / (1<<15));
 }
 
+//shifts int16_t into int32_t with zeroing the lower portion
+int32_t L_deposit_h(int16_t val)
+{
+	return (int32_t)val<<16;
+}
+
+//cast int16_t into int32_t
+int32_t L_deposit_l(int16_t val)
+{
+	return (int32_t)val;
+}
+
 //---------------------------------32-bit arithmetic---------------------------------
 int32_t L_shl(int32_t val1, int16_t val2);
 int32_t L_shr(int32_t val1, int16_t val2);
@@ -193,6 +205,7 @@ int32_t L_shl(int32_t val1, int16_t val2)
 }
 
 //arithmetically shift the 32 bit input val1 right by val2 positions, with saturation
+//TODO: check this function
 int32_t L_shr(int32_t val1, int16_t val2)
 {
 	if(val2 < 0)
@@ -216,6 +229,29 @@ int32_t L_shr(int32_t val1, int16_t val2)
 	}
 }
 
+//same as L_shr(L_var1,var2)but with rounding
+int32_t L_shr_r(int32_t val1, int16_t val2)
+{
+	if(val2 > 31)
+	{
+		return 0;
+	}
+	else
+	{
+		int32_t rv = L_shr(val1, val2);
+		
+		if(val2 > 0)
+		{
+			if((val1 & ((int32_t)1 << (val2-1))) != 0)
+			{
+				rv++;
+			}
+		}
+		
+		return rv;
+	}
+}
+
 //calculate shl(val1*val2, 1)-val3 with saturation
 int32_t L_msu_shl(int16_t val1, int16_t val2, int32_t val3)
 {
@@ -233,6 +269,12 @@ int32_t L_msu(int16_t val1, int16_t val2, int32_t val3)
 int16_t extract_l(int32_t val)
 {
 	return (int16_t)val;
+}
+
+//return 16 MSB of the val
+int16_t extract_h(int32_t val)
+{
+	return (int16_t)(val>>16);
 }
 
 //calculate shl(val1, shift)+val2
@@ -350,10 +392,77 @@ int16_t store_h(int32_t val1, int16_t val2)
 	return extract_l(L_shr(val1, SHR[val2]));
 }
 
+//load the 16 bit val1 with a left shift of val2 into 32 bit output
+int32_t Load_shl(int16_t val1, int16_t val2)
+{
+	return L_msu(val1, N_POW2[val2], 0);
+}
+
 //load the 16 bit val with a left shift of 16 into 32 bit output
 int32_t Load_shl16(int16_t val)
 {
 	return L_msu_shl(val, -32768, 0);
+}
+
+//calculate val1/val2
+//both val1 and val2 have to be positive
+//and val1<val2
+int16_t div_s(int16_t val1, int16_t val2)
+{
+	if((val1 > val2) || (val1 < 0) || (val2 < 0))
+	{
+		#ifdef DBG_MSG
+		printf("Division error\n");
+		#endif
+		exit(0);
+	}
+	
+    if(val2 == 0)
+	{
+		#ifdef DBG_MSG
+		printf("Division by 0\n");
+		#endif
+		exit(0);
+	}
+	
+	if(val1 == 0)
+	{
+		return 0;
+	}
+	else
+	{
+		if (val1 == val2)
+		{
+			return MAX_16;
+		}
+		else
+		{
+			int32_t numerator   = L_deposit_l(val1);
+			int32_t denominator = L_deposit_l(val2);
+			int16_t rv = 0;
+			
+			for(uint8_t i=0; i<15; i++)
+			{
+				rv <<= 1;
+				numerator <<= 1;
+				
+				if(numerator >= denominator)
+				{
+					numerator = L_sub_s(numerator, denominator);
+					rv = add_s(rv, 1);
+				}
+			}
+			
+			return rv;
+		}
+	}
+}
+
+//round the lower 16 bits of the 32 bit input number into its most significant 16 bits
+//with saturation. Shift the resulting bits right by 16 and return the 16 bit number
+int16_t round_s(int32_t val)
+{
+	return extract_h(L_add_s(val, 32768));
 }
 
 //----------------------------------Mid-level functions----------------------------------
@@ -374,9 +483,9 @@ void LD_solver_32(int16_t Rh[], int16_t Rl[], int16_t A[])
 
 int main(void)
 {
-	int16_t val=norm_l(-2);
+	int16_t val=div_s(3, 100);
 	
-	printf("%ld, ovf=%d\n", val, ovf);
+	printf("%d, ovf=%d\n", val, ovf);
 	
 	return 0;
 }
