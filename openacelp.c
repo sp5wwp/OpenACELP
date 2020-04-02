@@ -2,470 +2,146 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI		3.14159265358979323846
+#endif
+
+#define DEBUG										//comment it out later
 
 //-----------------------------ACELP includes & defines------------------------------
-#define MAX_32	 2147483647
-#define MIN_32	-2147483648
-#define HALF_32	 1073741824
-
-#define MAX_16	 32767
-#define MIN_16	-32768
-#define HALF_16	 16384
-
-
 //Global consts
-#include "N_POW2.h"	//powers of 2 array
-#include "LOG2.h"	//array for Log2 computation	
+#include "N_POW2.h"									//powers of 2 array
+#include "LOG2.h"									//array for Log2 computation
+
+#define FRAME_LEN		20							//voice frame length in ms
+#define FRAME_SIZ		160							//voice frame samples number, 0.02s*8000Hz
+#define	WINDOW_LEN		30							//length of window for autocorrelation computation
+#define WINDOW_SIZ		240							//window samples number, 0.03s*8000Hz
+#define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
+
+//Global vars
+float    w[WINDOW_SIZ];								//modified Hamming window w(n) coeffs for speech analysis
+uint32_t r[11];										//autocorrelation values
 
 //Global flags
-uint8_t ovf=0;		//global overflow flag
-uint8_t carry=0;	//global carry flag
+//
 
-//----------------------------------Basic functions----------------------------------
-//---------------------------------16-bit arithmetic---------------------------------
-//cast an int32_t into int16_t with saturation
-int16_t saturate(int32_t val)
+//----------------------------------ACELP functions----------------------------------
+//input speech signal pre-processing
+//y[i] = x[i]/2 - x[i-1]/2 + alpha * y[i-1]
+//arg1: present frame, arg2: output
+void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 {
-	int16_t rv;
+	#ifdef DEBUG
+	if(inp==NULL || outp==NULL)
+	{
+		printf("NULL pointer at Speech_Pre_Process()\n");
+		exit(0);
+	}
+	#endif
+	
+	outp[0]=inp[0];
+	
+	for(uint8_t i=1; i<WINDOW_SIZ; i++)
+	{
+		outp[i] = inp[i]/2 - inp[i-1]/2 + ALPHA*outp[i-1];
+	}
+}
 
-	if(val > MAX_16)
+//compute the modified Hamming window w(n) coeffs for speech analysis
+void Analysis_Window_Init(float *w)
+{
+	uint8_t L2 = 40;			//40 samples look ahead
+	uint8_t L1 = WINDOW_SIZ-40;
+	
+	for(uint8_t i=0; i<L1; i++)
 	{
-		ovf = 1;
-		return MAX_16;
+		w[i] = 0.54 - 0.46 * cos((M_PI*i)/((float)L1-1.0));
 	}
-	else if(val < MIN_16)
+	for(uint8_t i=L1; i< L1+L2; i++)
 	{
-		ovf = 1;
-		return MIN_16;
+		w[i] = 0.54 + 0.46 * cos((M_PI*(i-L1))/((float)L2-1.0));
 	}
-	else
+}
+
+//multiply processed speech samples with modified Hamming window
+void Window_Speech(int16_t *inp, int16_t *outp)
+{
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		outp[i] = inp[i] * w[i];
+}
+
+//autocorrelation r(k) computation, k=0..10
+void Autocorr(int16_t *spch, uint32_t *r)
+{
+	uint8_t ovf;
+	uint32_t prev;
+	uint8_t norm_shift=0;		//shifts left needed to normalize r[]
+
+	memset((uint8_t*)r, 0, 11*sizeof(uint32_t));
+	
+	//initially, set r[0]=1 to avoid r[] containing only zeros
+	r[0]=1;
+	
+	//r[0] calculation
+	//if r[0] overflows uint32_t, divide the signal by 4
+	do
 	{
 		ovf = 0;
-		return (int16_t)val;
-	}
-}
-
-//absolute value with saturation
-int16_t abs_s(int16_t val)
-{
-	if(val==MIN_16)
-		return MAX_16;
-	else
-		return (int16_t)abs(val);
-}
-
-//sum with saturation
-int16_t add_s(int16_t a, int16_t b)
-{
-	return saturate((int32_t)a + (int32_t)b);
-}
-
-//subtraction with saturation
-int16_t sub(int16_t a, int16_t b)
-{
-	return saturate((int32_t)a - (int32_t)b);
-}
-
-//calculate val1*val2, scaled
-int16_t mult(int16_t val1, int16_t val2)
-{
-	return saturate(((int32_t)val1 * (int32_t)val2) / (1<<15));
-}
-
-//shifts int16_t into int32_t with zeroing the lower portion
-int32_t L_deposit_h(int16_t val)
-{
-	return (int32_t)val<<16;
-}
-
-//cast int16_t into int32_t
-int32_t L_deposit_l(int16_t val)
-{
-	return (int32_t)val;
-}
-
-//---------------------------------32-bit arithmetic---------------------------------
-int32_t L_shl(int32_t val1, int16_t val2);
-int32_t L_shr(int32_t val1, int16_t val2);
-
-//sum with saturation
-int32_t L_add_s(int32_t val1, int32_t val2)
-{
-	int64_t rv = val1 + val2;
-
-	if(rv > MAX_32)
-	{
-		ovf = 1;
-		return MAX_32;
-	}
-	else if(rv < MIN_32)
-	{
-		ovf = 1;
-		return MIN_32;
-	}
-	else
-	{
-		return (int32_t)rv;
-	}
-}
-
-//subtraction with saturation (val1-val2)
-int32_t L_sub_s(int32_t val1, int32_t val2)
-{
-	int64_t rv = (int64_t)val1 - (int64_t)val2;
-
-	if(rv > MAX_32)
-	{
-		ovf = 1;
-		return MAX_32;
-	}
-	else if(rv < MIN_32)
-	{
-		ovf = 1;
-		return MIN_32;
-	}
-	else
-	{
-		return (int32_t)rv;
-	}
-}
-
-//L_mult is the 32 bit result of the multiplication of var1 times var2
-int32_t L_mult(int16_t val1, int16_t val2)
-{
-	int64_t rv = ((int32_t)val1 * (int32_t)val2);
-
-	if(rv > MAX_32)
-	{
-		ovf = 1;
-		return MAX_32;
-	}
-	else if(rv < MIN_32)
-	{
-		ovf = 1;
-		return MIN_32;
-	}
-	else
-		return (int32_t)rv;
-}
-
-//L_mult_shl is the 32 bit result of the multiplication of var1 times var2 with one shift left
-int32_t L_mult_shl(int16_t val1, int16_t val2)
-{
-	int64_t rv = ((int64_t)val1 * (int64_t)val2)*2;
-
-	if(rv > MAX_32)
-	{
-		ovf = 1;
-		return MAX_32;
-	}
-	else if(rv < MIN_32)
-	{
-		ovf = 1;
-		return MIN_32;
-	}
-	else
-		return (int32_t)rv;
-}
-
-//calculate val1*val2+val3 (multiply-accumulate)
-int32_t L_mac(int16_t val1, int16_t val2, int32_t val3)
-{
-	return L_add_s(L_mult(val1, val2), val3);
-}
-
-//calculate shl(val1*val2, 1)+val3 (multiply-accumulate with shift left)
-int32_t L_mac_shl(int16_t val1, int16_t val2, int32_t val3)
-{
-	return L_add_s(L_mult_shl(val1, val2), val3);
-}
-
-//arithmetically shift the 32 bit input val1 left by val2 positions, with saturation
-int32_t L_shl(int32_t val1, int16_t val2)
-{
-	if(val2 <= 0)
-		return L_shr(val1, -val2);
-	else
-	{
-		int64_t rv = (int64_t)val1 * (1<<(uint16_t)val2);
 		
-		if(rv > MAX_32)
+		for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		{
-			ovf = 1;
-			return MAX_32;
-		}
-		else if(rv < MIN_32)
-		{
-			ovf = 1;
-			return MIN_32;
-		}
-		else
-			return (int32_t)rv;
-	}
-}
-
-//arithmetically shift the 32 bit input val1 right by val2 positions, with saturation
-//TODO: check this function
-int32_t L_shr(int32_t val1, int16_t val2)
-{
-	if(val2 < 0)
-		return L_shl(val1, -val2);
-	else
-	{
-		int64_t rv = (int64_t)val1 / (1<<(uint16_t)val2);
+			prev = r[0];
+			r[0] += (uint32_t)(spch[i] * spch[i]);
 		
-		if(rv > MAX_32)
-		{
-			ovf = 1;
-			return MAX_32;
-		}
-		else if(rv < MIN_32)
-		{
-			ovf = 1;
-			return MIN_32;
-		}
-		else
-			return (int32_t)rv;
-	}
-}
-
-//same as L_shr(L_var1,var2)but with rounding
-int32_t L_shr_r(int32_t val1, int16_t val2)
-{
-	if(val2 > 31)
-	{
-		return 0;
-	}
-	else
-	{
-		int32_t rv = L_shr(val1, val2);
-		
-		if(val2 > 0)
-		{
-			if((val1 & ((int32_t)1 << (val2-1))) != 0)
-			{
-				rv++;
-			}
-		}
-		
-		return rv;
-	}
-}
-
-//calculate shl(val1*val2, 1)-val3 with saturation
-int32_t L_msu_shl(int16_t val1, int16_t val2, int32_t val3)
-{
-	return L_sub_s(val3, L_mult_shl(val1, val2));
-}
-
-//calculate val1*val2-val3 with saturation
-int32_t L_msu(int16_t val1, int16_t val2, int32_t val3)
-{
-	return L_sub_s(val3, L_mult(val1, val2));
-}
-
-//"extract the lower portion of int32_t"
-//TODO: this function might be magic, investigate its behaviour. it just casts int32_t into int16_t
-int16_t extract_l(int32_t val)
-{
-	return (int16_t)val;
-}
-
-//return 16 MSB of the val
-int16_t extract_h(int32_t val)
-{
-	return (int16_t)(val>>16);
-}
-
-//calculate shl(val1, shift)+val2
-int32_t add_shl(int16_t val1, int16_t shift, int32_t val2)
-{
-	return L_msu(val1, N_POW2[shift], val2);
-}
- 
-//calculate shl(val1, 16)+val2
-int32_t add_shl16(int16_t val1, int32_t val2)
-{
-	return L_msu_shl(val1, -32768, val2);
-}
-
-//calculate shl(val1, shift)-val2
-int32_t sub_shl(int16_t val1, int16_t shift, int32_t val2)
-{
-	return L_mac(val1, N_POW2[shift], val2);
-}
-
-//calculate shl(val1, 16)-val2
-int32_t sub_shl16(int16_t val1, int16_t shift, int32_t val2)
-{
-	return L_mac_shl(val1, -32768, val2);
-}
-
-//calculate -val with saturation
-int16_t negate(int16_t val)
-{
-	if(val==MIN_16)
-		return MAX_16;
-	else
-		return -val;
-}
-
-//bit shifts needed to normalize int32_t to range MIN_32..-HALF_32 and HALF_32..MAX_32
-int16_t norm_l(int32_t val)
-{
-	if(val == 0)
-	{
-		return 0;
-	}
-	else
-	{
-		if(val == -1)
-		{
-			return 31;
-		}
-		else
-		{
-			if(val < 0)
-				val = ~val;
-
-			int16_t rv=0;
-
-			for(; val < HALF_32; rv++)
-			{
-				val <<= 1;
-			}
-			
-			return rv;
-		}
-	}
-}
-
-//bit shifts needed to normalize int16_t to range MIN_16..-HALF_16 and HALF_16..MAX_16
-int16_t norm_s(int16_t val)
-{
-	if(val == 0)
-	{
-		return 0;
-	}
-	else
-	{
-		if(val == -1)
-		{
-			return 15;
-		}
-		else
-		{
-			if(val < 0)
-				val = ~val;
-
-			int16_t rv=0;
-
-			for(; val < HALF_16; rv++)
-			{
-				val <<= 1;
-			}
-			
-			return rv;
-		}
-	}
-}
-
-//variable normalisation of a 32 bit integer (val1)
-//val2 gives the maximum number of left shift to be done
-//val3 returns the actual number of left shift
-int32_t norm_v(int32_t val1, int16_t val2, int16_t *val3)
-{
-	int16_t shift = norm_l(val1);
-
-	if(sub(shift, val2) > 0)
-		shift = val2;
-	*val3 = shift;
-
-	return L_shl(val1, shift);
-}
-
-//store high part of val1 with a left shift of val2
-int16_t store_h(int32_t val1, int16_t val2)
-{
-	static const int16_t SHR[8] = {16, 15, 14, 13, 12, 11, 10, 9};
-
-	return extract_l(L_shr(val1, SHR[val2]));
-}
-
-//load the 16 bit val1 with a left shift of val2 into 32 bit output
-int32_t Load_shl(int16_t val1, int16_t val2)
-{
-	return L_msu(val1, N_POW2[val2], 0);
-}
-
-//load the 16 bit val with a left shift of 16 into 32 bit output
-int32_t Load_shl16(int16_t val)
-{
-	return L_msu_shl(val, -32768, 0);
-}
-
-//calculate val1/val2
-//both val1 and val2 have to be positive
-//and val1<val2
-int16_t div_s(int16_t val1, int16_t val2)
-{
-	if((val1 > val2) || (val1 < 0) || (val2 < 0))
-	{
-		#ifdef DBG_MSG
-		printf("Division error\n");
-		#endif
-		exit(0);
-	}
-	
-    if(val2 == 0)
-	{
-		#ifdef DBG_MSG
-		printf("Division by 0\n");
-		#endif
-		exit(0);
-	}
-	
-	if(val1 == 0)
-	{
-		return 0;
-	}
-	else
-	{
-		if (val1 == val2)
-		{
-			return MAX_16;
-		}
-		else
-		{
-			int32_t numerator   = L_deposit_l(val1);
-			int32_t denominator = L_deposit_l(val2);
-			int16_t rv = 0;
-			
-			for(uint8_t i=0; i<15; i++)
-			{
-				rv <<= 1;
-				numerator <<= 1;
+			if(r[0] < prev)	//overflow occured?
+			{				
+				//divide the signal by 4
+				for(uint8_t j=0; j<WINDOW_SIZ; j++)
+					spch[j]/=4;
 				
-				if(numerator >= denominator)
-				{
-					numerator = L_sub_s(numerator, denominator);
-					rv = add_s(rv, 1);
-				}
+				//zero r[]
+				memset((uint8_t*)r, 0, 11*sizeof(uint32_t));
+				
+				ovf = 1;
+				
+				//break the "for" loop
+				break;
 			}
-			
-			return rv;
 		}
 	}
+	while(ovf);
+	
+	#ifdef DEBUG
+	printf("r[0]=%lld\n", r[0]);
+	#endif
+
+	//r[0] normalization to the uint32_t limit
+	//shift left until the MSB==1
+	for(uint8_t i=0; i<32; i++)
+	{
+		while(!(r[0] & 0x80000000))
+		{
+			r[0]<<=1;
+			norm_shift++;
+		}
+	}
+	
+	#ifdef DEBUG
+	printf("norm_shift=%d\n", norm_shift);
+	#endif
 }
 
-//round the lower 16 bits of the 32 bit input number into its most significant 16 bits
-//with saturation. Shift the resulting bits right by 16 and return the 16 bit number
-int16_t round_s(int32_t val)
+//LPC coefficients calculation
+//based on the Levison-Durbin algorithm
+void LD_Solver(uint32_t *r, int16_t *A)
 {
-	return extract_h(L_add_s(val, 32768));
+	;
 }
 
-//----------------------------------Mid-level functions----------------------------------
 //innovative codebook search
 int16_t Innov_Codebook_Search(int16_t dn[], int16_t f[], int16_t h[], int16_t rr[][32],
              int16_t cod[], int16_t y[], int16_t *sign, int16_t *shift_code)
@@ -473,19 +149,32 @@ int16_t Innov_Codebook_Search(int16_t dn[], int16_t f[], int16_t h[], int16_t rr
 	;
 }
 
-//LPC coefficients calculation
-//based on the Levison-Durbin algorithm
-//in double precision
-void LD_solver_32(int16_t Rh[], int16_t Rl[], int16_t A[])
-{
-	;
-}
-
 int main(void)
 {
-	int16_t val=div_s(3, 100);
+	int16_t tst_spch[WINDOW_SIZ];
+	int16_t tst_out[WINDOW_SIZ];
 	
-	printf("%d, ovf=%d\n", val, ovf);
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		tst_spch[i]=(sin(i/8.0)*0x1FFF)*2;
+	
+	Speech_Pre_Process(tst_spch, tst_out);
+	
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		;//printf("%d|%d\n", tst_spch[i], tst_out[i]);
+	
+	Analysis_Window_Init(w);
+	
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		;//printf("%f\n", w[i]);
+		
+	memcpy((int16_t*)tst_spch, (int16_t*)tst_out, WINDOW_SIZ*sizeof(int16_t));
+		
+	Window_Speech(tst_spch, tst_out);
+	
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		;//printf("%d\n", tst_out[i]);
+		
+	Autocorr(tst_out, r);
 	
 	return 0;
 }
