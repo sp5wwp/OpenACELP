@@ -18,16 +18,48 @@
 #define	WINDOW_LEN		30							//length of window for autocorrelation computation
 #define WINDOW_SIZ		240							//window samples number, 0.03s*8000Hz
 #define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
+#define GRID_SIZ		60							//grid granularity for LSP computation
 
 //Global vars
 float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
+float		grid[GRID_SIZ];							//grid of values for LSP computation
 uint32_t	r[11];									//autocorrelation values
-float		lp[11];									//LP coeffs
-
-//Global flags
-//
+float		lp[11];									//LP coeffs (10, but starting from lp[1])
+float		lsp[10];								//LSP coeffs in cosine domain
 
 //----------------------------------ACELP functions----------------------------------
+//generate grid of values for LSP computation
+void Grid_Generate(float *g)
+{
+	g[0] = 1.0;
+	g[GRID_SIZ] = -1.0;
+	
+	for(uint8_t i=1; i<GRID_SIZ; i++)
+		g[i] = cos((M_PI*i)/GRID_SIZ);
+}
+
+//LSP F(z) polynomial evaluation using Chebyshev polynomials
+//arg1: input value, arg2: f() coeffs
+//retval: evaluated value
+float Chebyshev_Eval(float x, float *f)
+{
+	uint8_t n=5;	//coeffs num
+	
+	float b0, b1, b2;
+	
+	b2 = f[0];
+	b1 = 2.0*x + f[1];
+	
+	for(uint8_t i=2; i<n; i++)
+	{
+		b0 = 2.0*x*b1 - b2 + f[i];
+		b2 = b1;
+		b1 = b0;
+	}
+	
+	return x*b1 - b2 + 0.5*f[n];
+}
+
 //input speech signal pre-processing
 //y[i] = x[i]/2 - x[i-1]/2 + alpha * y[i-1]
 //arg1: present frame, arg2: output
@@ -36,12 +68,12 @@ void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 	#ifdef DEBUG
 	if(inp==NULL || outp==NULL)
 	{
-		printf("NULL pointer at Speech_Pre_Process()\n");
+		printf("\nNULL pointer at Speech_Pre_Process()\n");
 		exit(0);
 	}
 	#endif
 	
-	outp[0]=inp[0];
+	outp[0]=inp[0]/2;
 	
 	for(uint8_t i=1; i<WINDOW_SIZ; i++)
 	{
@@ -237,6 +269,120 @@ void LD_Solver(uint32_t *r, float *a)
 	#endif
 }
 
+//convert LP to LSP
+//arg1: previous frame LSP array, arg2: present frame LP array, arg3: output LSP array
+void LP_LSP(float *prev_LSP, float *a, float *LSP)
+{
+	float f1[6] = {1.0, 0, 0, 0, 0, 0};
+	float f2[6] = {1.0, 0, 0, 0, 0, 0};
+	float *coefs;							//coeff set that we are using
+	uint8_t found=0;						//found roots
+	uint8_t loc=0;							//location in the grid
+	float x1, x2, y1, y2, xm, ym, x, y;		//vals for root search
+
+	//5 polynomial coeffs
+	for(uint8_t i=0; i<5; i++)
+ 	{
+		f1[i+1] = a[i+1] + a[10-i] - f1[i];
+		f2[i+1] = a[i+1] - a[10-i] + f2[i];
+	}
+	
+	#ifdef DEBUG
+	//evaluation of the polynomial - root search
+	printf("\n");
+	for(uint8_t i=0; i<GRID_SIZ; i++)
+		;//printf("%f\n", Chebyshev_Eval(grid[i], f2));
+	#endif
+	
+	//look for roots in f1 first
+	coefs = f1;
+	
+	//search init
+	x1 = grid[0];
+	y1 = Chebyshev_Eval(x1, coefs);
+	
+	//search for the roots
+	//until we have 10 or we have searched thru all the grid values (0..pi)
+	while(found<10 && loc<GRID_SIZ)
+	{
+		loc++;	//move thru the grid
+		
+		x2 = x1;
+		y2 = y1;
+		x1 = grid[loc];
+		y1 = Chebyshev_Eval(x1, coefs);
+		
+		//check for a sign change
+		if(y1*y2 <= 0)
+		{
+			//divide the range 4 times
+			for(uint8_t i=0; i<4; i++)
+      		{
+        		xm = 0.5 * (x1+x2);
+        		ym = Chebyshev_Eval(xm, coefs);
+  				
+  				//sign change in the lower half?
+				if(y1*ym <= 0)
+        		{
+        			//move there
+          			y2 = ym;
+          			x2 = xm;
+        		}
+        		//same thing here - zero crossing in the second half?
+        		else
+        		{
+        			//move there
+          			y1 = ym;
+          			x1 = xm;
+        		}
+        	}
+        	
+        	//linear interpolation for the fine root value
+        	x = x2-x1;
+        	y = y2-y1;
+        	
+        	if(fabs(y)<0.0001)	//unsafe to compare floats to 0.0
+        		x = x1;
+        	else
+        	{
+        		y = (x2-x1)/(y2-y1);
+        		y=fabs(y);
+        		x1 = x1 - y1*y;
+        	}
+			
+			LSP[found]=x1;
+			found++;
+			
+			#ifdef DEBUG
+			printf("%f|%f|%d\n", x1, y2, loc);
+			#endif
+			
+			//swap f1 with f2 and vice-versa, for next search
+			if(coefs == &f1)
+			{
+				coefs = &f2;
+			}
+			else
+			{
+  	    		coefs = &f1;
+  	    	}
+		}
+        	
+        //apply new value of y1
+		y1 = Chebyshev_Eval(x1, coefs);
+	}
+	
+	//check if we have found all 10 roots
+	//if not - copy old roots and use them
+	if(found<10)
+	{
+        memcpy(LSP, prev_LSP, 10*sizeof(float));
+        #ifdef DEBUG
+     	printf("\nLess than 10 roots found in LP_LSP()\n");
+     	#endif
+	}
+}
+
 int main(void)
 {
 	int16_t tst_spch[WINDOW_SIZ];
@@ -245,6 +391,7 @@ int main(void)
 	for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		tst_spch[i]=(sin(i/8.0)*0x1FFF)*2;
 	
+	Grid_Generate(grid);
 	Speech_Pre_Process(tst_spch, tst_out);
 	
 	for(uint8_t i=0; i<WINDOW_SIZ; i++)
@@ -266,7 +413,7 @@ int main(void)
 	
 	LD_Solver(r, lp);
 	
-	
+	LP_LSP(NULL, lp, lsp);
 	
 	return 0;
 }
