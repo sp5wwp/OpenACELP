@@ -115,7 +115,7 @@ void Autocorr(int16_t *spch, uint32_t *r)
 	//initially, set r[0]=1 to avoid r[] containing only zeros
 	//zero out the rest
 	r[0]=1;
-	memset((uint8_t*)&r[1], 0, 10*sizeof(uint32_t));
+	memset(&r[1], 0, 10*sizeof(uint32_t));
 	
 	//r[0] calculation
 	//if r[0] overflows uint32_t, divide the signal by 4
@@ -126,7 +126,7 @@ void Autocorr(int16_t *spch, uint32_t *r)
 		for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		{
 			prev = r[0];
-			r[0] += (uint32_t)(spch[i] * spch[i]);
+			r[0] += (uint32_t)spch[i] * (uint32_t)spch[i];
 		
 			if(r[0] < prev)	//overflow occured?
 			{				
@@ -138,6 +138,10 @@ void Autocorr(int16_t *spch, uint32_t *r)
 				r[0] = 1;
 				
 				ovf = 1;
+				
+				#ifdef DEBUG
+				printf("\nOverflow occured in Autocorr()\n");
+				#endif
 				
 				//break the "for" loop
 				break;
@@ -168,7 +172,7 @@ void Autocorr(int16_t *spch, uint32_t *r)
 	}
 	
 	#ifdef DEBUG
-	printf("norm_shift=%d\n", norm_shift);
+	printf("\nnorm_shift=%d\n", norm_shift);
 	for(uint8_t i=0; i<=10; i++)
 		printf("r[%d]=%lld\n", i, r[i]);
 	printf("\n");
@@ -232,11 +236,14 @@ void LD_Solver(uint32_t *r, float *a)
 		
 		//test for filter stability
 		//if case of instability, use previous coeffs
+		//TODO: something might be wrong with this check
 		if(fabs(k) > 32750.0/32767.0)
 		{
-			for(uint8_t j=0; j<=10; j++)
-				a[j] = prev_a[j];
-        	return;
+			memcpy(a, prev_a, 11*sizeof(float));
+			#ifdef DEBUG
+			printf("\nUnstable filter, k=%f\n", k);
+			#endif
+			return;
 		}
 		
 		//compute new coeffs
@@ -248,24 +255,24 @@ void LD_Solver(uint32_t *r, float *a)
 		an[i] = k;
 		alpha *= (1.0-k*k);
 		
-		memcpy((uint8_t*)at, (uint8_t*)an, 11*sizeof(float));
+		memcpy(at, an, 11*sizeof(float));
 	}
 	
 	prev_a[0]=0.125;
-	memcpy((uint8_t*)&prev_a[1], (uint8_t*)&at[1], 10*sizeof(float));
+	memcpy(&prev_a[1], &at[1], 10*sizeof(float));
 	
 	//return solution
 	if(a!=NULL)
 	{
 		a[0]=0.125;	//dunno what for, but ETSI EN does it
-		memcpy((uint8_t*)&a[1], (uint8_t*)&at[1], 10*sizeof(float));
+		memcpy(&a[1], &at[1], 10*sizeof(float));
 		//TODO: why the coeffs are with a wrong sign?
 		//positive values should be negative and vice versa
 	}
 	
 	#ifdef DEBUG
 	for(uint8_t i=0; i<11; i++)
-		printf("a=[%d]=%f\n", i, a[i]);
+		printf("a[%d]=%f\n", i, a[i]);
 	#endif
 }
 
@@ -341,34 +348,34 @@ void LP_LSP(float *prev_LSP, float *a, float *LSP)
         	x = x2-x1;
         	y = y2-y1;
         	
-        	if(fabs(y)<0.0001)	//unsafe to compare floats to 0.0
-        		x = x1;
-        	else
-        	{
-        		y = (x2-x1)/(y2-y1);
-        		y=fabs(y);
-        		x1 = x1 - y1*y;
-        	}
+			if(fabs(y)<0.0001)	//unsafe to compare floats to 0.0
+				x = x1;
+			else
+			{
+				y = (x2-x1)/(y2-y1);
+				y=fabs(y);
+				x1 = x1 - y1*y;
+			}
 			
 			LSP[found]=x1;
 			found++;
 			
 			#ifdef DEBUG
-			printf("%f|%f|%d\n", x1, y2, loc);
+			printf("%f|%f|%d|%f\n", x1, y2, loc, 8000.0/(2*M_PI)*acos(x1));
 			#endif
 			
 			//swap f1 with f2 and vice-versa, for next search
-			if(coefs == &f1)
+			if(coefs == f1)
 			{
-				coefs = &f2;
+				coefs = f2;
 			}
 			else
 			{
-  	    		coefs = &f1;
+				coefs = f1;
   	    	}
 		}
         	
-        //apply new value of y1
+		//apply new value of y1
 		y1 = Chebyshev_Eval(x1, coefs);
 	}
 	
@@ -376,10 +383,10 @@ void LP_LSP(float *prev_LSP, float *a, float *LSP)
 	//if not - copy old roots and use them
 	if(found<10)
 	{
-        memcpy(LSP, prev_LSP, 10*sizeof(float));
-        #ifdef DEBUG
-     	printf("\nLess than 10 roots found in LP_LSP()\n");
-     	#endif
+		memcpy(LSP, prev_LSP, 10*sizeof(float));
+		#ifdef DEBUG
+		printf("\nLess than 10 roots found in LP_LSP()\n");
+		#endif
 	}
 }
 
@@ -389,7 +396,7 @@ int main(void)
 	int16_t tst_out[WINDOW_SIZ];
 	
 	for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		tst_spch[i]=(sin(i/8.0)*0x1FFF)*2;
+		tst_spch[i]=(sin(i/8.0)+0.5*sin(i/4.0)+0.25*sin(i/2.0))*0x1FFF;
 	
 	Grid_Generate(grid);
 	Speech_Pre_Process(tst_spch, tst_out);
