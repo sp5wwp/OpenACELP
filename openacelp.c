@@ -20,8 +20,9 @@
 #define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
 
 //Global vars
-float    w[WINDOW_SIZ];								//modified Hamming window w(n) coeffs for speech analysis
-uint32_t r[11];										//autocorrelation values
+float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
+uint32_t	r[11];									//autocorrelation values
+float		lp[11];									//LP coeffs
 
 //Global flags
 //
@@ -51,8 +52,8 @@ void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 //compute the modified Hamming window w(n) coeffs for speech analysis
 void Analysis_Window_Init(float *w)
 {
-	uint8_t L2 = 40;			//40 samples look ahead
-	uint8_t L1 = WINDOW_SIZ-40;
+	uint8_t L2 = 40;				//40 samples look ahead
+	uint8_t L1 = WINDOW_SIZ-L2;		//200 samples
 	
 	for(uint8_t i=0; i<L1; i++)
 	{
@@ -171,77 +172,69 @@ void Autocorr(int16_t *spch, uint32_t *r)
 //LP coefficients calculation
 //based on the Levison-Durbin algorithm
 //arg1: modified autocorrelation matrix, arg2: LP filter coeffs
-void LD_Solver(uint32_t *r, int32_t *a)
+void LD_Solver(uint32_t *r, float *a)
 {
-	float v, c, e;
-	float rv[11];	//
-	float tmp[11];	//
-	//float E[11];
-	//float sum;
+	//previous frame coeffs
+	//we shouldn't care about a[0], but ETSI EN sets this to 0.125
+	static float prev_a[11] = {0.125, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 	
-	/*E[0] = (float)r[0];
+	float k, alpha;
+	float at[11], an[11];	//t: this iteration, n: next iteration
+	float sum;
 	
-	for(uint8_t i=1; i<=10; i++)
+	k = -(float)r[1] / r[0];
+	at[1] = k;
+	alpha = (float)r[0] * (1.0-k*k);
+	
+	for(uint8_t i=2; i<=10; i++)
 	{
-		sum=0.0;
-		
-		if(i>1)
-		{
-			sum=0.0;
-			for(uint8_t j=1; j<=i-1; j++)
-				sum += (float)a_p[j]*r[i-j];
-		}
-		
-		k = -((float)r[i]+sum)/E[i-1];
-		
-		a_p[i] = k;
+		sum = 0.0;
 		
 		for(uint8_t j=1; j<=i-1; j++)
 		{
-			a_n[j] = a_p[j] + k * a_p[i-j];
+			sum += (float)r[j]*at[i-j];
 		}
 		
-		E[i] = (1.0-k*k) * E[i-1];
-	}*/
-	
-	rv[0]=1.0;
-	tmp[0]=1.0;
-	rv[1]=-(float)r[1]/r[0];
-	
-	v=r[0]-(float)r[1]*r[1]/r[0];
-	
-	for(uint8_t j=1; j<=10; j++)
-	{
-		e=0.0;
+		sum += (float)r[i];
+		k = -sum / alpha;
 		
-		for(uint8_t i=0; i<=j-1; i++)
+		//test for filter stability
+		//if case of instability, use previous coeffs
+		if(fabs(k) > 32750.0/32767.0)
 		{
-			e+=r[j-i]*a[i-1];
-			c=e/v;
-			v=v-c*e;
-			
+			for(uint8_t j=0; j<=10; j++)
+				a[j] = prev_a[j];
+        	return;
 		}
+		
+		//compute new coeffs
+		for(uint8_t j=1; j<=i-1; j++)
+		{
+			an[j] = at[j] + k*at[i-j];
+		}
+		
+		an[i] = k;
+		alpha *= (1.0-k*k);
+		
+		memcpy((uint8_t*)at, (uint8_t*)an, 11*sizeof(float));
 	}
 	
-	for(uint8_t i=0; i<11; i++)
-		printf("%f\n", rv[i]);
-	/*
+	prev_a[0]=0.125;
+	memcpy((uint8_t*)&prev_a[1], (uint8_t*)&at[1], 10*sizeof(float));
+	
+	//return solution
+	if(a!=NULL)
+	{
+		a[0]=0.125;	//dunno what for, but ETSI EN does it
+		memcpy((uint8_t*)&a[1], (uint8_t*)&at[1], 10*sizeof(float));
+		//TODO: why the coeffs are with a wrong sign?
+		//positive values should be negative and vice versa
+	}
+	
 	#ifdef DEBUG
-	for(uint8_t i=0; i<10; i++)
-	{
-		for(uint8_t j=0; j<10; j++)
-		{
-			if(j<9)
-				printf("%lld,", r[abs(i-j)]);
-			else
-				printf("%lld;\n", r[abs(i-j)]);
-		}
-	}
-	
-	for(uint8_t i=1; i<=10; i++)
-			printf("%lld\n", r[i]);
+	for(uint8_t i=0; i<11; i++)
+		printf("a=[%d]=%f\n", i, a[i]);
 	#endif
-	*/
 }
 
 int main(void)
@@ -271,7 +264,9 @@ int main(void)
 		
 	Autocorr(tst_out, r);
 	
-	LD_Solver(r, NULL);
+	LD_Solver(r, lp);
+	
+	
 	
 	return 0;
 }
