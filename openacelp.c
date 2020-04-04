@@ -24,7 +24,7 @@
 //Global vars
 float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
 float		grid[GRID_SIZ];							//grid of values for LSP computation
-uint32_t	r[11];									//autocorrelation values
+int32_t		r[11];									//autocorrelation values
 float		lp[11];									//LP coeffs (10, but starting from lp[1])
 float		lsp[10];								//LSP coeffs in cosine domain
 
@@ -66,7 +66,7 @@ float Chebyshev_Eval(float x, float *f)
 //arg1: present frame, arg2: output
 void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 {
-	#ifdef DEBUG
+	#ifdef ERRORS
 	if(inp==NULL || outp==NULL)
 	{
 		printf("\nNULL pointer at Speech_Pre_Process()\n");
@@ -107,30 +107,31 @@ void Window_Speech(int16_t *inp, int16_t *outp)
 
 //autocorrelation r(k) computation, k=0..10
 //additional bandwidth expansion f=60Hz for f_s=8000Hz sample rate
-void Autocorr(int16_t *spch, uint32_t *r)
+void Autocorr(int16_t *spch, int32_t *r)
 {
 	uint8_t ovf;
-	uint32_t prev;
-	uint8_t norm_shift=0;		//shifts left needed to normalize r[]
+	int32_t tmp;				//for a[0] computation
+	uint8_t norm_shift = 0;		//shifts left needed to normalize r[]
 
 	//initially, set r[0]=1 to avoid r[] containing only zeros
-	//zero out the rest
+	//and zero out the rest
 	r[0]=1;
-	memset(&r[1], 0, 10*sizeof(uint32_t));
+	memset(&r[1], 0, 10*sizeof(int32_t));
 	
 	//r[0] calculation
-	//if r[0] overflows uint32_t, divide the signal by 4
+	//if r[0] overflows int32_t, divide the signal by 4
 	do
 	{
 		ovf = 0;
+		tmp = 0;
 		
 		for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		{
-			prev = r[0];
-			r[0] += (uint32_t)spch[i] * (uint32_t)spch[i];
+			tmp += (int32_t)spch[i] * (int32_t)spch[i];
 		
-			if(r[0] < prev)	//overflow occured?
-			{				
+			if(tmp < (int32_t)INT16_MIN || tmp > (int32_t)INT16_MAX)	//overflow occured?
+			//if(abs(tmp) < INT16_MAX)	//maybe faster
+			{
 				//divide the signal by 4
 				for(uint8_t j=0; j<WINDOW_SIZ; j++)
 					spch[j] /= 4;
@@ -140,7 +141,7 @@ void Autocorr(int16_t *spch, uint32_t *r)
 				
 				ovf = 1;
 				
-				#ifdef DEBUG
+				#ifdef ERROR
 				printf("\nOverflow occured in Autocorr()\n");
 				#endif
 				
@@ -150,14 +151,16 @@ void Autocorr(int16_t *spch, uint32_t *r)
 		}
 	}
 	while(ovf);
+	
+	r[0] = tmp;
 
-	//r[0] normalization to the uint32_t limit
-	//shift left until the MSB==1
+	//r[0] normalization to the int32_t limit
+	//multiply by 2 until we can't no more
 	for(uint8_t i=0; i<32; i++)
 	{
-		while(!(r[0] & 0x80000000))
+		while(abs(r[0]) < INT16_MAX/2-1)
 		{
-			r[0]<<=1;
+			r[0]*=2;
 			norm_shift++;
 		}
 	}
@@ -169,7 +172,8 @@ void Autocorr(int16_t *spch, uint32_t *r)
 			r[i] += spch[j] * spch[j-i];
 			
 		//normalize
-		r[i] <<= norm_shift;
+		for(uint8_t j=0; j<norm_shift; j++)
+			r[i] *= 2;;
 	}
 	
 	#ifdef DEBUG
@@ -209,9 +213,9 @@ void Autocorr(int16_t *spch, uint32_t *r)
 //LP coefficients calculation
 //based on the Levison-Durbin algorithm
 //arg1: modified autocorrelation matrix, arg2: LP filter coeffs
-void LD_Solver(uint32_t *r, float *a)
+void LD_Solver(int32_t *r, float *a)
 {
-	//previous frame coeffs
+	//previous frame coeffs - static variable!
 	//we shouldn't care about a[0], but ETSI EN sets this to 0.125
 	static float prev_a[11] = {0.125, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 	
@@ -242,7 +246,20 @@ void LD_Solver(uint32_t *r, float *a)
 		{
 			memcpy(a, prev_a, 11*sizeof(float));
 			#ifdef ERRORS
-			printf("\nUnstable filter, k=%f\n", k);
+			printf("\nUnstable filter, k=%1.2f at i=%d\n", k, i);
+			#ifdef DEBUG
+			for(uint8_t i=0; i<10; i++)
+			{
+				for(uint8_t j=0; j<10; j++)
+					printf("%d, ", r[abs(i-j)]);
+				printf(";\n");
+			}
+			
+			printf("\n");
+			
+			for(uint8_t i=1; i<=10; i++)
+				printf("%d;\n", r[i]);
+			#endif
 			#endif
 			return;
 		}
@@ -267,8 +284,6 @@ void LD_Solver(uint32_t *r, float *a)
 	{
 		a[0]=0.125;	//dunno what for, but ETSI EN does it
 		memcpy(&a[1], &at[1], 10*sizeof(float));
-		//TODO: why the coeffs are with a wrong sign?
-		//positive values should be negative and vice versa
 	}
 	
 	#ifdef DEBUG
@@ -382,7 +397,7 @@ void LP_LSP(float *prev_LSP, float *a, float *LSP)
 	
 	//check if we have found all 10 roots
 	//if not - copy old roots and use them
-	if(found<10)
+	if(found<10 && prev_LSP!=NULL)
 	{
 		memcpy(LSP, prev_LSP, 10*sizeof(float));
 		#ifdef DEBUG
@@ -475,21 +490,28 @@ int main(uint8_t argc, uint8_t *argv[])
 			while(fread(spch_in, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
 			{
 				frame++;
-				printf("Frame %d\n", frame);
 				
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				//pre-process speech and window it
-				Speech_Pre_Process(spch_in, spch_out);
-				memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
-				Window_Speech(spch_in, spch_out);
+				//if(frame==34)	//test
+				{
+					printf("Frame %d\n", frame);
+					
+					//pre-process speech and window it
+					Speech_Pre_Process(spch_in, spch_out);
+					memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+					Window_Speech(spch_in, spch_out);
+					
+					//compute LSPs
+					Autocorr(spch_out, r);
+					LD_Solver(r, lp);
+					LP_LSP(NULL, lp, lsp);
+				}
 				
-				//compute LSPs
-				Autocorr(spch_out, r);
-				LD_Solver(r, lp);
-				LP_LSP(NULL, lp, lsp);
-				if(frame==40) break;	//limit for test purposes
+				//limit for test purposes
+				if(frame==40)
+					;//break;
 			}
 		}
 	}
