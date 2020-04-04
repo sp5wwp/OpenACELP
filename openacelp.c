@@ -489,9 +489,14 @@ int main(uint8_t argc, uint8_t *argv[])
 				Autocorr(spch_out, r);
 				LD_Solver(r, lp);
 				LP_LSP(NULL, lp, lsp);
-				if(frame==40) break;
+				if(frame==40) break;	//limit for test purposes
 			}
 		}
+	}
+	else
+	{
+		printf("Invalid params\nExiting.\n");
+		return 1;
 	}
 	
 	return 0;
