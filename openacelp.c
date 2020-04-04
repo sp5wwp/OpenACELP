@@ -6,10 +6,11 @@
 #include <math.h>
 
 #ifndef M_PI
-#define M_PI		3.14159265358979323846
+#define M_PI			3.14159265358979323846
 #endif
 
-#define DEBUG										//comment it out later
+//#define DEBUG										//comment it out later
+#define ERRORS
 
 //-----------------------------ACELP includes & defines------------------------------
 //Global consts
@@ -240,7 +241,7 @@ void LD_Solver(uint32_t *r, float *a)
 		if(fabs(k) > 32750.0/32767.0)
 		{
 			memcpy(a, prev_a, 11*sizeof(float));
-			#ifdef DEBUG
+			#ifdef ERRORS
 			printf("\nUnstable filter, k=%f\n", k);
 			#endif
 			return;
@@ -390,37 +391,108 @@ void LP_LSP(float *prev_LSP, float *a, float *LSP)
 	}
 }
 
-int main(void)
+//convert LSP coeffs to F1(z) or F2(z)
+/*void LSP_Poly(float *LSP, float *f)
 {
-	int16_t tst_spch[WINDOW_SIZ];
-	int16_t tst_out[WINDOW_SIZ];
+	f[0] = 1.0;
+	f[1] = -2.0 * LSP[0];
 	
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		tst_spch[i]=(sin(i/8.0)+0.5*sin(i/4.0)+0.25*sin(i/2.0))*0x1FFF;
-	
-	Grid_Generate(grid);
-	Speech_Pre_Process(tst_spch, tst_out);
-	
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		;//printf("%d|%d\n", tst_spch[i], tst_out[i]);
-	
-	Analysis_Window_Init(w);
-	
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		;//printf("%f\n", w[i]);
+	for(uint8_t i=2; i<=5; i++)
+	{
+		f[i] = -2.0*LSP[2*i-1]*f[i-1]+2.0*f[i-2];
 		
-	memcpy((int16_t*)tst_spch, (int16_t*)tst_out, WINDOW_SIZ*sizeof(int16_t));
+		for(int8_t j=i-1; i>=1; i--)
+		{
+			if(j>1)
+				f[j] = f[j] - 2.0*LSP[2*i-1]*f[j-1] + f[j-2];
+			else
+				f[j] = f[j] - 2.0*LSP[2*i-1]*f[j-1] + 0.0;	//f(-1)=0
+		}
+	}
+}*/
+
+//convert LSP to LP
+//arg1: input LSP array, arg2: computed LP array
+/*void LSP_LP(float* lsp, float* a)
+{
+	float f1[6], f2[6];
+	
+	//get F1(z) and F2(z) coeffs
+	LSP_Poly(&lsp[0], f1);
+	LSP_Poly(&lsp[1], f2);
+	
+	for(int8_t i=5; i>0; i--)
+	{
+		f1[i] += f1[i-1];
+		f2[i] -= f2[i-1];
+	}
+	
+	a[0]=0.125; //nobody knows why, but OK...
+	
+	int8_t i, j;
+	for(i=1, j=10; i<=5; i++, j--)
+	{
+		a[i] = f1[i] + f2[i];
+		a[j] = f1[i] - f2[i];
+	}
+}*/
+
+//initialize consts
+void ACELP_Init(float *search_grid, float *analysis_window)
+{
+	Grid_Generate(search_grid);
+	Analysis_Window_Init(analysis_window);
+}
+
+//main routine
+//argv[1]: file name (RAW, signed 16-bit, Little-Endian, 8000Hz)
+int main(uint8_t argc, uint8_t *argv[])
+{
+	FILE *aud;
+	int16_t spch_in[WINDOW_SIZ];
+	int16_t spch_out[WINDOW_SIZ];
+	
+	if(argc==2)
+	{
+		printf("Loading \"%s\"...\n\n", argv[1]);
 		
-	Window_Speech(tst_spch, tst_out);
-	
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		;//printf("%d\n", tst_out[i]);
+		aud = fopen(argv[1], "rb");
 		
-	Autocorr(tst_out, r);
-	
-	LD_Solver(r, lp);
-	
-	LP_LSP(NULL, lp, lsp);
+		if(aud==NULL)
+		{
+			printf("No file named \"%s\"\n", argv[1]);
+			printf("Exiting.\n");
+			return 1;
+		}
+		else
+		{
+			//initialize consts etc.
+			ACELP_Init(grid, w);
+			
+			uint16_t frame=0;	//frame number
+			
+			//load 30ms frames, overlapping
+			while(fread(spch_in, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
+			{
+				frame++;
+				printf("Frame %d\n", frame);
+				
+				//take us 10ms back (80 samples * sizeof(int16_t))
+				fseek(aud, -160, 1);
+				
+				//pre-process speech and window it
+				Speech_Pre_Process(spch_in, spch_out);
+				memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+				Window_Speech(spch_in, spch_out);
+				
+				//compute LSPs
+				Autocorr(spch_out, r);
+				LD_Solver(r, lp);
+				LP_LSP(NULL, lp, lsp);
+				if(frame==40) break;
+			}
+		}
+	}
 	
 	return 0;
 }
