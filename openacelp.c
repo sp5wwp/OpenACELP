@@ -28,6 +28,8 @@ int32_t		r[11];									//autocorrelation values
 float		lp[11];									//LP coeffs (10, but starting from lp[1])
 float		lsp[10];								//LSP coeffs in cosine domain
 
+uint16_t	frame = 0;								//frame number
+
 //----------------------------------ACELP functions----------------------------------
 //generate grid of values for LSP computation
 void Grid_Generate(float *g)
@@ -110,7 +112,7 @@ void Window_Speech(int16_t *inp, int16_t *outp)
 void Autocorr(int16_t *spch, int32_t *r)
 {
 	uint8_t ovf;
-	int32_t tmp;				//for a[0] computation
+	int64_t tmp;				//for a[0] computation
 	uint8_t norm_shift = 0;		//shifts left needed to normalize r[]
 
 	//initially, set r[0]=1 to avoid r[] containing only zeros
@@ -127,22 +129,19 @@ void Autocorr(int16_t *spch, int32_t *r)
 		
 		for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		{
-			tmp += (int32_t)spch[i] * (int32_t)spch[i];
+			tmp += (int64_t)spch[i] * (int64_t)spch[i];
 		
-			if(tmp < (int32_t)INT16_MIN || tmp > (int32_t)INT16_MAX)	//overflow occured?
-			//if(abs(tmp) < INT16_MAX)	//maybe faster
+			if(tmp > (int64_t)INT32_MAX)	//overflow occured?
 			{
 				//divide the signal by 4
 				for(uint8_t j=0; j<WINDOW_SIZ; j++)
 					spch[j] /= 4;
 				
-				//re-set r[0] to 1
-				r[0] = 1;
-				
 				ovf = 1;
 				
-				#ifdef ERROR
-				printf("\nOverflow occured in Autocorr()\n");
+				#ifdef ERRORS
+				printf("Overflow occured in Autocorr() at i=%d\n", i);
+				printf("val=%lld\n", tmp);
 				#endif
 				
 				//break the "for" loop
@@ -152,13 +151,13 @@ void Autocorr(int16_t *spch, int32_t *r)
 	}
 	while(ovf);
 	
-	r[0] = tmp;
-
+	r[0] = (int32_t)tmp;
+	
 	//r[0] normalization to the int32_t limit
 	//multiply by 2 until we can't no more
 	for(uint8_t i=0; i<32; i++)
 	{
-		while(abs(r[0]) < INT16_MAX/2-1)
+		while(r[0] < (INT32_MAX/2-1))
 		{
 			r[0]*=2;
 			norm_shift++;
@@ -173,7 +172,7 @@ void Autocorr(int16_t *spch, int32_t *r)
 			
 		//normalize
 		for(uint8_t j=0; j<norm_shift; j++)
-			r[i] *= 2;;
+			r[i] *= 2;
 	}
 	
 	#ifdef DEBUG
@@ -242,24 +241,11 @@ void LD_Solver(int32_t *r, float *a)
 		//test for filter stability
 		//if case of instability, use previous coeffs
 		//TODO: something might be wrong with this check
-		if(fabs(k) > 32750.0/32767.0)
+		if(fabs(k) > 32750.0/32767.0)	//close enough to 1.0
 		{
 			memcpy(a, prev_a, 11*sizeof(float));
 			#ifdef ERRORS
-			printf("\nUnstable filter, k=%1.2f at i=%d\n", k, i);
-			#ifdef DEBUG
-			for(uint8_t i=0; i<10; i++)
-			{
-				for(uint8_t j=0; j<10; j++)
-					printf("%d, ", r[abs(i-j)]);
-				printf(";\n");
-			}
-			
-			printf("\n");
-			
-			for(uint8_t i=1; i<=10; i++)
-				printf("%d;\n", r[i]);
-			#endif
+			printf("Unstable filter, k=%1.2f at i=%d\n", k, i);
 			#endif
 			return;
 		}
@@ -484,8 +470,6 @@ int main(uint8_t argc, uint8_t *argv[])
 			//initialize consts etc.
 			ACELP_Init(grid, w);
 			
-			uint16_t frame=0;	//frame number
-			
 			//load 30ms frames, overlapping
 			while(fread(spch_in, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
 			{
@@ -494,24 +478,21 @@ int main(uint8_t argc, uint8_t *argv[])
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				//if(frame==34)	//test
-				{
-					printf("Frame %d\n", frame);
-					
-					//pre-process speech and window it
-					Speech_Pre_Process(spch_in, spch_out);
-					memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
-					Window_Speech(spch_in, spch_out);
-					
-					//compute LSPs
-					Autocorr(spch_out, r);
-					LD_Solver(r, lp);
-					LP_LSP(NULL, lp, lsp);
-				}
+				//printf("Frame %d\n", frame);
 				
-				//limit for test purposes
-				if(frame==40)
-					;//break;
+				//pre-process speech and window it
+				Speech_Pre_Process(spch_in, spch_out);
+				memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+				Window_Speech(spch_in, spch_out);
+				
+				//compute LSPs
+				Autocorr(spch_out, r);
+				LD_Solver(r, lp);
+				LP_LSP(NULL, lp, lsp);
+				
+				for(uint8_t i=0; i<5; i++)
+					printf("%f|", 8000.0/(2*M_PI)*acos(lsp[i]));
+				printf("\n");
 			}
 		}
 	}
