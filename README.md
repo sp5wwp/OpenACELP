@@ -10,4 +10,4 @@ Done:
 - autocorrelation parameters of the windowed speech, bandwidth expanded (equation 2.4 in [2])
 - Levinson-Durbin recursive solver for computing Linear Prediction (LP) filter coefficients ([2] - chapter 2.2.2)
 - conversion of LP coefficients to the LSPs (Line Spectral Pair) in the cosine domain ([2] - chapter 2.2.3)
-- Chebyshev polynomial generation for LSPs root search (LSP polynomial evaluation)
+- Chebyshev polynomials generation for LSPs root search (LSP polynomial evaluation)
