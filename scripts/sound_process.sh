@@ -14,6 +14,9 @@
 #convert all .sph files to .wav
 #do it if the .wav file doesn't exist already
 #trim out the crap (20s on both ends)
+#of course some windowing should be added
+#to avoid sudden signal changes,
+#but we can live with that
 for f in *.sph
 do
 	if [ ! -f "${f%.*}.wav" ]
@@ -46,3 +49,6 @@ do
 	sox "$f" -r 8000 "${f%.*}_new.wav"
 	mv "${f%.*}_new.wav" "$f"
 done
+
+#merge all pieces into one
+sox $(ls *.wav) corpus.wav
