@@ -11,6 +11,11 @@
 # SP5WWP 07/04/2020
 #-----------------------------------------------------------
 
+#retain generated WAV files?
+retain=$1
+
+echo "Processing..."
+
 #convert all .sph files to .wav
 #do it if the .wav file doesn't exist already
 #trim out the crap (20s on both ends)
@@ -29,6 +34,7 @@ done
 for f in *.wav
 do
 	sox --norm=-1 "$f" "${f%.*}_new.wav"
+	rm "$f"
 	mv "${f%.*}_new.wav" "$f"
 done
 
@@ -38,7 +44,8 @@ for f in *.wav
 do
 	for passes in {1..4}
 	do
-		ffmpeg -i "$f" -filter lowpass=3400 "${f%.*}_new.wav"
+		ffmpeg -hide_banner -loglevel panic -i "$f" -filter lowpass=3400 "${f%.*}_new.wav"
+		rm "$f"
 		mv "${f%.*}_new.wav" "$f"
 	done
 done
@@ -46,9 +53,19 @@ done
 #resample to 8000Hz
 for f in *.wav
 do
+	echo "$f"
 	sox "$f" -r 8000 "${f%.*}_new.wav"
+	rm "$f"
 	mv "${f%.*}_new.wav" "$f"
 done
 
 #merge all pieces into one
-sox $(ls *.wav) corpus.wav
+sox $(ls *.wav) corpus.raw
+
+#delete old WAVs
+if [ $retain == 0 ]
+then
+	rm *.wav
+fi
+
+echo "Done."
