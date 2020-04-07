@@ -13,11 +13,12 @@
 
 #convert all .sph files to .wav
 #do it if the .wav file doesn't exist already
+#trim out the crap (20s on both ends)
 for f in *.sph
 do
 	if [ ! -f "${f%.*}.wav" ]
 	then
-		sox -t sph "$f" -b 16 -t wav "${f%.*}.wav"
+		sox -t sph "$f" -b 16 -t wav "${f%.*}.wav" trim 20 -20
 	fi
 done
 
