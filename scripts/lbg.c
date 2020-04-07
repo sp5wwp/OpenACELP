@@ -16,9 +16,9 @@ struct vec data_in[10000000];						//input data set
 //512 dynamic length arrays for Voronoi cell vector binning ("partitions")
 typedef struct
 {
-  struct vec *array;
-  size_t used;
-  size_t size;
+	struct vec *array;
+	size_t used;
+	size_t size;
 } Array;
 
 Array partition[512];
