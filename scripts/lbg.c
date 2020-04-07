@@ -12,7 +12,42 @@ struct vec
 };
 
 struct vec data_in[10000000];						//input data set
-struct vec *partition[512];							//pointers to binned vectors (for Voronoi cell vector binning)
+
+//512 dynamic length arrays for Voronoi cell vector binning ("partitions")
+typedef struct
+{
+  struct vec *array;
+  size_t used;
+  size_t size;
+} Array;
+
+Array partition[512];
+
+void initArray(Array *a, size_t initialSize)
+{
+	a->array = (struct vec*)malloc(initialSize*sizeof(struct vec));
+	a->used = 0;
+	a->size = initialSize;
+}
+
+void insertArray(Array *a, struct vec *element)
+{
+	if(a->used == a->size)
+	{
+		a->size++;
+		a->array = (struct vec*)realloc(a->array, a->size*sizeof(struct vec));
+	}
+	
+	a->array[a->used++] = *element;
+}
+
+void freeArray(Array *a)
+{
+	free(a->array);
+	a->array = NULL;
+	a->used = a->size = 0;
+}
+//------------------------------------------------------------------------
 
 //distance (squared) between vectors
 //arg1: input vector, arg2: input vector, arg3: dimension = {3, 4}
@@ -121,6 +156,18 @@ int main(void)
 	struct vec test_vec={1.0, 1.0, 1.0, 0.0};
 
 	printf("%f\n", distance_set(&test_vec, data_in, 2, 3));
+	
+	for(uint16_t i=0; i<512; i++)
+		initArray(&partition[i], 1);
+	
+	insertArray(&partition[0], &test_vec);
+	insertArray(&partition[0], &test_vec);
+	
+	printf("%d\n", partition[0].used);
+	
+	freeArray(&partition[0]);
+	
+	printf("%d\n", partition[0].used);
 	
 	return 0;
 }
