@@ -59,8 +59,11 @@ do
 	mv "${f%.*}_new.wav" "$f"
 done
 
-#merge all pieces into one
-sox $(ls *.wav) corpus.raw
+#merge all pieces into one and add noise
+#it is needed, so the autocorrelator
+#won't go crazy at longer silence periods
+sox $(ls *.wav) corpus.wav
+sox corpus.wav -p synth whitenoise vol 0.00005 | sox -m corpus.wav - corpus.raw
 
 #delete old WAVs
 if [ $retain == 0 ]
