@@ -394,6 +394,84 @@ void LP_LSP(float *prev_LSP, float *a, float *LSP)
 	}
 }
 
+//split vector quantization of LSP parameters
+//full codebook search with squared error metric (saving one division)
+//arg1: LSPs in cosine domain (10), arg2: quantized LSPs output (10), arg3: codebook indices output (3)
+void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
+{
+	uint16_t ind_rv[3];
+	
+	float se;
+	float delta;
+	float min=10000.0;
+	
+	//codebook 1 search
+	for(uint16_t i=0; i<size_cb1; i++)
+	{
+		se=0.0;
+		
+		for(uint8_t j=0; j<3; j++)
+		{
+			delta = lsp[j]-cb1[i*3+j];
+			se += delta*delta;
+		}
+		
+		if(se < min)
+		{
+			min = se;
+			ind_rv[0]=i;
+		}
+	}
+	    
+	min   =10000.0;
+	
+	//codebook 2 search
+	for(uint16_t i=0; i<size_cb2; i++)
+	{		
+		se=0.0;
+		
+		for(uint8_t j=0; j<3; j++)
+		{
+			delta = lsp[3+j]-cb2[i*3+j];
+			se += delta*delta;
+		}
+		
+		if(se < min)
+		{
+			min = se;
+			ind_rv[1]=i;
+		}
+	}
+	  
+	min   =10000.0;
+	
+	//codebook 3 search
+	for(uint16_t i=0; i<size_cb3; i++)
+	{
+		se=0.0;
+		
+		for(uint8_t j=0; j<4; j++)
+		{
+			delta = lsp[6+j]-cb3[i*4+j];
+			se += delta*delta;
+		}
+		
+		if(se < min)
+		{
+			min = se;
+			ind_rv[2]=i;
+		}
+	}
+	
+	//return quantized vector...
+	memcpy(&q_lsp[0], &cb1[ind_rv[0]], 3*sizeof(float));
+	memcpy(&q_lsp[3], &cb2[ind_rv[1]], 3*sizeof(float));
+	memcpy(&q_lsp[6], &cb3[ind_rv[2]], 4*sizeof(float));
+	
+	//...and codebook indices
+	memcpy(ind, ind_rv, 3*sizeof(uint16_t));
+}
+
 //convert LSP coeffs to F1(z) or F2(z)
 /*void LSP_Poly(float *LSP, float *f)
 {
@@ -491,7 +569,7 @@ int main(uint8_t argc, uint8_t *argv[])
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				printf("Frame %d\n", frame);
+				//printf("Frame %d\n", frame);
 				
 				//pre-process speech and window it
 				Speech_Pre_Process(spch_in, spch_out);
@@ -535,6 +613,17 @@ int main(uint8_t argc, uint8_t *argv[])
 						fprintf(q3, "%f ),\n", lsp[i]);
 				}
 				*/
+				
+				//if(frame==34)
+				{
+					uint16_t indices[3];
+					float q_lsp[10];
+					
+					LSP_SVQ(lsp, q_lsp, indices);
+					
+					//for(uint8_t i=0; i<3; i++)
+						printf("q_lsp=[%d, %d, %d]\n", indices[0], indices[1], indices[2]);
+				}
 			}
 		}
 		
