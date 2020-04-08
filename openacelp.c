@@ -10,9 +10,11 @@
 #endif
 
 //#define DEBUG										//comment it out later
+//define OVF_INFO
 #define ERRORS
 
 //-----------------------------ACELP includes & defines------------------------------
+#include "LSP_codebooks.h"
 //Global consts
 #define FRAME_LEN		20							//voice frame length in ms
 #define FRAME_SIZ		160							//voice frame samples number, 0.02s*8000Hz
@@ -28,7 +30,7 @@ int32_t		r[11];									//autocorrelation values
 float		lp[11];									//LP coeffs (10, but starting from lp[1])
 float		lsp[10];								//LSP coeffs in cosine domain
 
-uint16_t	frame = 0;								//frame number
+uint64_t	frame = 0;								//frame number
 
 //----------------------------------ACELP functions----------------------------------
 //generate grid of values for LSP computation
@@ -139,7 +141,7 @@ void Autocorr(int16_t *spch, int32_t *r)
 				
 				ovf = 1;
 				
-				#ifdef ERRORS
+				#ifdef OVF_INFO
 				printf("Overflow occured in Autocorr() at i=%d\n", i);
 				printf("val=%lld\n", tmp);
 				#endif
@@ -453,11 +455,22 @@ int main(uint8_t argc, uint8_t *argv[])
 	int16_t spch_in[WINDOW_SIZ];
 	int16_t spch_out[WINDOW_SIZ];
 	
+	//FILE *q1, *q2, *q3;	//training set
+	
 	if(argc==2)
 	{
 		printf("Loading \"%s\"...\n\n", argv[1]);
 		
 		aud = fopen(argv[1], "rb");
+		/*
+		q1 = fopen("Q1.py", "wb");
+		q2 = fopen("Q2.py", "wb");
+		q3 = fopen("Q3.py", "wb");
+		
+		fprintf(q1, "q1 = [\n");
+		fprintf(q2, "q2 = [\n");
+		fprintf(q3, "q3 = [\n");
+		*/
 		
 		if(aud==NULL)
 		{
@@ -478,7 +491,7 @@ int main(uint8_t argc, uint8_t *argv[])
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				//printf("Frame %d\n", frame);
+				printf("Frame %d\n", frame);
 				
 				//pre-process speech and window it
 				Speech_Pre_Process(spch_in, spch_out);
@@ -490,11 +503,53 @@ int main(uint8_t argc, uint8_t *argv[])
 				LD_Solver(r, lp);
 				LP_LSP(NULL, lp, lsp);
 				
-				for(uint8_t i=0; i<5; i++)
-					printf("%f|", 8000.0/(2*M_PI)*acos(lsp[i]));
-				printf("\n");
+				/*
+				//vector file dump
+				//Q1 = {q1, q2, q3}
+				fprintf(q1, "( ");
+				for(uint8_t i=0; i<=2; i++)
+				{
+					if(i<2)
+						fprintf(q1, "%f, ", lsp[i]);
+					else
+						fprintf(q1, "%f ),\n", lsp[i]);
+				}
+				
+				//Q2 = {q4, q5, q6}
+				fprintf(q2, "( ");
+				for(uint8_t i=3; i<=5; i++)
+				{
+					if(i<5)
+						fprintf(q2, "%f, ", lsp[i]);
+					else
+						fprintf(q2, "%f ),\n", lsp[i]);
+				}
+				
+				//Q3 = {q7, q8, q9, q10}
+				fprintf(q3, "( ");
+				for(uint8_t i=6; i<=9; i++)
+				{
+					if(i<9)
+						fprintf(q3, "%f, ", lsp[i]);
+					else
+						fprintf(q3, "%f ),\n", lsp[i]);
+				}
+				*/
 			}
 		}
+		
+		/*
+		fseek(q1, -2, 1);
+		fseek(q2, -2, 1);
+		fseek(q3, -2, 1);
+		
+		fprintf(q1, "\n]");
+		fprintf(q2, "\n]");
+		fprintf(q3, "\n]");
+		fclose(q1);
+		fclose(q2);
+		fclose(q3);
+		*/
 	}
 	else
 	{

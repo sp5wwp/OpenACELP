@@ -27,8 +27,8 @@
 #define dim_cb3		4
 //sizes
 #define size_cb1	256
-#define size_dic2	512
-#define size_dic3	512
+#define size_cb2	512
+#define size_cb3	512
 
 //1st codebook
 float cb1[dim_cb1*size_cb1] =
