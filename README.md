@@ -3,7 +3,7 @@ Free ACELP vocoder. It is based on **ETSI EN 300-395-2**<sup>[1]</sup> and **TIA
 
 I'm using TED-LIUM release 1 ([OpenSLR link](http://www.openslr.org/7/), [download](https://projets-lium.univ-lemans.fr/ted-lium/release1/)) as the english speech corpus and [py-lbg](https://github.com/internaut/py-lbg) for codebook generation using Linde-Buzo-Gray (LBG) algorithm.
 
-**Actual phase:** preparing codebooks for LSP split-vector quantization (LSPs in the cosine domain). Refer to [1], chapter 4.2.2.3.
+**Actual phase:** testing LSP codebooks.
 
 Done:
 - speech framing and windowing (refer to [2], chapter 2.2.1)
@@ -11,3 +11,4 @@ Done:
 - Levinson-Durbin recursive solver for computing Linear Prediction (LP) filter coefficients ([2] - chapter 2.2.2)
 - conversion of LP coefficients to the LSPs (Line Spectral Pair) in the cosine domain ([2] - chapter 2.2.3)
 - Chebyshev polynomials generation for LSPs root search (LSP polynomial evaluation)
+- Prepared test codebooks for LSP split-vector quantization (LSPs in the cosine domain). Refer to [1], chapter 4.2.2.3.
