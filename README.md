@@ -12,3 +12,5 @@ Done:
 - conversion of LP coefficients to the LSPs (Line Spectral Pair) in the cosine domain ([2] - chapter 2.2.3)
 - Chebyshev polynomials generation for LSPs root search (LSP polynomial evaluation)
 - Prepared test codebooks for LSP split-vector quantization (LSPs in the cosine domain). Refer to [1], chapter 4.2.2.3.
+- LSP codebooks full search
+
