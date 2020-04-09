@@ -26,11 +26,8 @@
 //Global vars
 float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
 float		grid[GRID_SIZ];							//grid of values for LSP computation
-int32_t		r[11];									//autocorrelation values
-float		lp[11];									//LP coeffs (10, but starting from lp[1])
-float		lsp[10];								//LSP coeffs in cosine domain
 
-uint64_t	frame = 0;								//frame number
+uint64_t	frame = 0;								//frame number - for our info
 
 //----------------------------------ACELP functions----------------------------------
 //generate grid of values for LSP computation
@@ -217,8 +214,7 @@ void Autocorr(int16_t *spch, int32_t *r)
 void LD_Solver(int32_t *r, float *a)
 {
 	//previous frame coeffs - static variable!
-	//we shouldn't care about a[0], but ETSI EN sets this to 0.125
-	static float prev_a[11] = {0.125, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	static float prev_a[11] = {1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 	
 	float k, alpha;
 	float at[11], an[11];	//t: this iteration, n: next iteration
@@ -270,7 +266,7 @@ void LD_Solver(int32_t *r, float *a)
 	//return solution
 	if(a!=NULL)
 	{
-		a[0]=0.125;	//dunno what for, but ETSI EN does it
+		a[0]=1.0;	//denominator of the H(z) is A(z)=1+sum(a*z)
 		memcpy(&a[1], &at[1], 10*sizeof(float));
 	}
 	
@@ -518,6 +514,111 @@ void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
 	}
 }*/
 
+//encode voice frame
+//arg1: input speech samples, 16-bit signed integer, arg2: 137 unpacked output bits
+void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
+{
+	//first call of this function?
+	static first=1;
+	
+	//local buffers for speech frame manipulation
+	int16_t spch_in[WINDOW_SIZ];
+	int16_t spch_out[WINDOW_SIZ];
+	
+	int32_t		r[11];									//autocorrelation values
+	float		lp[11];									//LP coeffs (10, but starting from lp[1])
+	float		lsp[10];								//LSP coeffs in cosine domain
+	
+	//LSP quantized vectors from the previous frame and this one
+	static lsp_q_prev[10];
+	static lsp_q_this[10];
+	
+	//LSP codebook indices for this frame
+	uint16_t lsp_cb_indices[3];
+	
+	//LSP vector interpolation for 4 subframes
+	float q1[10];
+	float q2[10];
+	float q3[10];
+	float q4[10];
+	
+	if(!first)
+	{
+		//pre processing and windowing
+		Speech_Pre_Process(spch_in, spch_out);
+		memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+		Window_Speech(spch_in, spch_out);
+		
+		//compute LSPs
+		Autocorr(spch_out, r);
+		LD_Solver(r, lp);
+		LP_LSP(NULL, lp, lsp);
+		
+		//quantize LSPs for subframe 4
+		LSP_SVQ(lsp, lsp_q_this, lsp_cb_indices);
+		
+		//interpolate q vectors for subframes 4,3,2,1
+		memcpy(q4, lsp_q_this, 10*sizeof(float));
+		for(uint8_t i=0; i<10; i++)
+		{
+			q3[i] = 0.75*q4[i] + 0.25*lsp_q_prev[i];
+			q2[i] = 0.50*q4[i] + 0.50*lsp_q_prev[i];
+			q1[i] = 0.25*q4[i] + 0.75*lsp_q_prev[i];
+		}
+		
+		//do stuff
+		;
+		
+		//update lsp_q_prev
+		memcpy(lsp_q_prev, lsp_q_this, 10*sizeof(float));
+	}
+	else
+	{
+		//first frame, init some stuff
+		//previous quantized LSP vector
+		lsp_q_prev[0]=30000.0/32768.0;
+		lsp_q_prev[1]=26000.0/32768.0;
+		lsp_q_prev[2]=21000.0/32768.0;
+		lsp_q_prev[3]=15000.0/32768.0;
+		lsp_q_prev[4]=8000.0/32768.0;
+		lsp_q_prev[5]=0.0/32768.0;
+		lsp_q_prev[6]=-8000.0/32768.0;
+		lsp_q_prev[7]=-15000.0/32768.0;
+		lsp_q_prev[8]=-21000.0/32768.0;
+		lsp_q_prev[9]=-26000.0/32768.0;
+		
+		//pre processing and windowing
+		Speech_Pre_Process(spch_in, spch_out);
+		memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+		Window_Speech(spch_in, spch_out);
+		
+		//compute LSPs
+		Autocorr(spch_out, r);
+		LD_Solver(r, lp);
+		LP_LSP(NULL, lp, lsp);
+		
+		//quantize LSPs for subframe 4
+		LSP_SVQ(lsp, lsp_q_this, lsp_cb_indices);
+		
+		//interpolate q vectors for subframes 4,3,2,1
+		memcpy(q4, lsp_q_this, 10*sizeof(float));
+		for(uint8_t i=0; i<10; i++)
+		{
+			q3[i] = 0.75*q4[i] + 0.25*lsp_q_prev[i];
+			q2[i] = 0.50*q4[i] + 0.50*lsp_q_prev[i];
+			q1[i] = 0.25*q4[i] + 0.75*lsp_q_prev[i];
+		}
+		
+		//do stuff
+		;
+		
+		//update lsp_q_prev
+		memcpy(lsp_q_prev, lsp_q_this, 10*sizeof(float));
+		
+		first=0;
+	}
+}
+
 //initialize consts
 void ACELP_Init(float *search_grid, float *analysis_window)
 {
@@ -530,25 +631,13 @@ void ACELP_Init(float *search_grid, float *analysis_window)
 int main(uint8_t argc, uint8_t *argv[])
 {
 	FILE *aud;
-	int16_t spch_in[WINDOW_SIZ];
-	int16_t spch_out[WINDOW_SIZ];
-	
-	//FILE *q1, *q2, *q3;	//training set
+	int16_t spch[WINDOW_SIZ];
 	
 	if(argc==2)
 	{
 		printf("Loading \"%s\"...\n\n", argv[1]);
 		
 		aud = fopen(argv[1], "rb");
-		/*
-		q1 = fopen("Q1.py", "wb");
-		q2 = fopen("Q2.py", "wb");
-		q3 = fopen("Q3.py", "wb");
-		
-		fprintf(q1, "q1 = [\n");
-		fprintf(q2, "q2 = [\n");
-		fprintf(q3, "q3 = [\n");
-		*/
 		
 		if(aud==NULL)
 		{
@@ -562,83 +651,18 @@ int main(uint8_t argc, uint8_t *argv[])
 			ACELP_Init(grid, w);
 			
 			//load 30ms frames, overlapping
-			while(fread(spch_in, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
+			while(fread(spch, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
 			{
 				frame++;
 				
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				//printf("Frame %d\n", frame);
+				printf("Frame %d\n", frame);
 				
-				//pre-process speech and window it
-				Speech_Pre_Process(spch_in, spch_out);
-				memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
-				Window_Speech(spch_in, spch_out);
-				
-				//compute LSPs
-				Autocorr(spch_out, r);
-				LD_Solver(r, lp);
-				LP_LSP(NULL, lp, lsp);
-				
-				/*
-				//vector file dump
-				//Q1 = {q1, q2, q3}
-				fprintf(q1, "( ");
-				for(uint8_t i=0; i<=2; i++)
-				{
-					if(i<2)
-						fprintf(q1, "%f, ", lsp[i]);
-					else
-						fprintf(q1, "%f ),\n", lsp[i]);
-				}
-				
-				//Q2 = {q4, q5, q6}
-				fprintf(q2, "( ");
-				for(uint8_t i=3; i<=5; i++)
-				{
-					if(i<5)
-						fprintf(q2, "%f, ", lsp[i]);
-					else
-						fprintf(q2, "%f ),\n", lsp[i]);
-				}
-				
-				//Q3 = {q7, q8, q9, q10}
-				fprintf(q3, "( ");
-				for(uint8_t i=6; i<=9; i++)
-				{
-					if(i<9)
-						fprintf(q3, "%f, ", lsp[i]);
-					else
-						fprintf(q3, "%f ),\n", lsp[i]);
-				}
-				*/
-				
-				//if(frame==34)
-				{
-					uint16_t indices[3];
-					float q_lsp[10];
-					
-					LSP_SVQ(lsp, q_lsp, indices);
-					
-					//for(uint8_t i=0; i<3; i++)
-						printf("q_lsp=[%d, %d, %d]\n", indices[0], indices[1], indices[2]);
-				}
+				ACELP_EncodeFrame(spch, NULL);
 			}
 		}
-		
-		/*
-		fseek(q1, -2, 1);
-		fseek(q2, -2, 1);
-		fseek(q3, -2, 1);
-		
-		fprintf(q1, "\n]");
-		fprintf(q2, "\n]");
-		fprintf(q3, "\n]");
-		fclose(q1);
-		fclose(q2);
-		fclose(q3);
-		*/
 	}
 	else
 	{
