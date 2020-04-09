@@ -613,11 +613,13 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	//now we have both quantized and unquantized LSP vectors for further computations
 	//we can change them back to {a_i} for the A(z)
 	
-	//LSP to A(z) conversion
-	float a[11];
-	LSP_LP(lsp_1, a);
+	//LSP to A(z) conversion for this frame
+	float az[11];
+	LSP_LP(lsp_this, az);
 	
-	
+	//"pole-zero type weighting procedure"
+	//filtering
+	;
 	
 	//update LSPs
 	memcpy(q_lsp_prev, q_lsp_this, 10*sizeof(float));
