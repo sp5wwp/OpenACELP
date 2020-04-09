@@ -260,7 +260,7 @@ void LD_Solver(int32_t *r, float *a)
 		memcpy(at, an, 11*sizeof(float));
 	}
 	
-	prev_a[0]=0.125;
+	prev_a[0]=1.0;
 	memcpy(&prev_a[1], &at[1], 10*sizeof(float));
 	
 	//return solution
@@ -469,28 +469,34 @@ void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
 }
 
 //convert LSP coeffs to F1(z) or F2(z)
-/*void LSP_Poly(float *LSP, float *f)
+//arg1: LSP array of length 10, arg2: F_1(z) or F_2(z) coefficients output
+void LSP_Poly(float *lsp, float *f)
 {
+	uint8_t k=0;
+	
 	f[0] = 1.0;
-	f[1] = -2.0 * LSP[0];
+	f[1] = -2.0 * lsp[k];
+	k+=2;
 	
 	for(uint8_t i=2; i<=5; i++)
 	{
-		f[i] = -2.0*LSP[2*i-1]*f[i-1]+2.0*f[i-2];
+		f[i] = -2.0*lsp[k]*f[i-1]+2.0*f[i-2];
 		
-		for(int8_t j=i-1; i>=1; i--)
+		for(int8_t j=i-1; j>=1; j--)
 		{
 			if(j>1)
-				f[j] = f[j] - 2.0*LSP[2*i-1]*f[j-1] + f[j-2];
+				f[j] = f[j] - 2.0*lsp[k]*f[j-1] + f[j-2];
 			else
-				f[j] = f[j] - 2.0*LSP[2*i-1]*f[j-1] + 0.0;	//f(-1)=0
+				f[j] = f[j] - 2.0*lsp[k]*f[j-1];	//f(-1)=0
 		}
+		
+		k+=2;
 	}
-}*/
+}
 
-//convert LSP to LP
+//convert LSP to LP (A(z))
 //arg1: input LSP array, arg2: computed LP array
-/*void LSP_LP(float* lsp, float* a)
+void LSP_LP(float *lsp, float *a)
 {
 	float f1[6], f2[6];
 	
@@ -504,119 +510,118 @@ void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
 		f2[i] -= f2[i-1];
 	}
 	
-	a[0]=0.125; //nobody knows why, but OK...
+	a[0]=1.0;
 	
 	int8_t i, j;
 	for(i=1, j=10; i<=5; i++, j--)
 	{
-		a[i] = f1[i] + f2[i];
-		a[j] = f1[i] - f2[i];
+		a[i] = 0.5 * (f1[i] + f2[i]);
+		a[j] = 0.5 * (f1[i] - f2[i]);
 	}
-}*/
+}
 
 //encode voice frame
 //arg1: input speech samples, 16-bit signed integer, arg2: 137 unpacked output bits
 void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 {
 	//first call of this function?
-	static first=1;
+	//make it global later,
+	//so it can be accessed outside of this function
+	static uint8_t first=1;
 	
 	//local buffers for speech frame manipulation
 	int16_t spch_in[WINDOW_SIZ];
 	int16_t spch_out[WINDOW_SIZ];
 	
 	int32_t		r[11];									//autocorrelation values
-	float		lp[11];									//LP coeffs (10, but starting from lp[1])
+	float		lp[11];									//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
 	float		lsp[10];								//LSP coeffs in cosine domain
 	
-	//LSP quantized vectors from the previous frame and this one
-	static lsp_q_prev[10];
-	static lsp_q_this[10];
+	//quantized and unquantized LSP vectors from the previous frame and this one
+	static float q_lsp_prev[10];
+	float q_lsp_this[10];
+	static float lsp_prev[10];
+	float lsp_this[10];
 	
 	//LSP codebook indices for this frame
 	uint16_t lsp_cb_indices[3];
 	
-	//LSP vector interpolation for 4 subframes
-	float q1[10];
-	float q2[10];
-	float q3[10];
-	float q4[10];
+	//quantized LSP vector interpolation for 4 subframes
+	float q_lsp_1[10];
+	float q_lsp_2[10];
+	float q_lsp_3[10];
+	float q_lsp_4[10];
 	
-	if(!first)
+	//"real", unquantized LSP vector interpolation for 4 subframes
+	float lsp_1[10];
+	float lsp_2[10];
+	float lsp_3[10];
+	float lsp_4[10];
+	
+	//first frame? initialize "previous" frame LSP vectors
+	if(first)
 	{
-		//pre processing and windowing
-		Speech_Pre_Process(spch_in, spch_out);
-		memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
-		Window_Speech(spch_in, spch_out);
-		
-		//compute LSPs
-		Autocorr(spch_out, r);
-		LD_Solver(r, lp);
-		LP_LSP(NULL, lp, lsp);
-		
-		//quantize LSPs for subframe 4
-		LSP_SVQ(lsp, lsp_q_this, lsp_cb_indices);
-		
-		//interpolate q vectors for subframes 4,3,2,1
-		memcpy(q4, lsp_q_this, 10*sizeof(float));
-		for(uint8_t i=0; i<10; i++)
-		{
-			q3[i] = 0.75*q4[i] + 0.25*lsp_q_prev[i];
-			q2[i] = 0.50*q4[i] + 0.50*lsp_q_prev[i];
-			q1[i] = 0.25*q4[i] + 0.75*lsp_q_prev[i];
-		}
-		
-		//do stuff
-		;
-		
-		//update lsp_q_prev
-		memcpy(lsp_q_prev, lsp_q_this, 10*sizeof(float));
-	}
-	else
-	{
-		//first frame, init some stuff
 		//previous quantized LSP vector
-		lsp_q_prev[0]=30000.0/32768.0;
-		lsp_q_prev[1]=26000.0/32768.0;
-		lsp_q_prev[2]=21000.0/32768.0;
-		lsp_q_prev[3]=15000.0/32768.0;
-		lsp_q_prev[4]=8000.0/32768.0;
-		lsp_q_prev[5]=0.0/32768.0;
-		lsp_q_prev[6]=-8000.0/32768.0;
-		lsp_q_prev[7]=-15000.0/32768.0;
-		lsp_q_prev[8]=-21000.0/32768.0;
-		lsp_q_prev[9]=-26000.0/32768.0;
+		lsp_prev[0] = q_lsp_prev[0] = 30000.0/32768.0;
+		lsp_prev[1] = q_lsp_prev[1] = 26000.0/32768.0;
+		lsp_prev[2] = q_lsp_prev[2] = 21000.0/32768.0;
+		lsp_prev[3] = q_lsp_prev[3] = 15000.0/32768.0;
+		lsp_prev[4] = q_lsp_prev[4] = 8000.0/32768.0;
+		lsp_prev[5] = q_lsp_prev[5] = 0.0;
+		lsp_prev[6] = q_lsp_prev[6] = -8000.0/32768.0;
+		lsp_prev[7] = q_lsp_prev[7] = -15000.0/32768.0;
+		lsp_prev[8] = q_lsp_prev[8] = -21000.0/32768.0;
+		lsp_prev[9] = q_lsp_prev[9] = -26000.0/32768.0;
 		
-		//pre processing and windowing
-		Speech_Pre_Process(spch_in, spch_out);
-		memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
-		Window_Speech(spch_in, spch_out);
-		
-		//compute LSPs
-		Autocorr(spch_out, r);
-		LD_Solver(r, lp);
-		LP_LSP(NULL, lp, lsp);
-		
-		//quantize LSPs for subframe 4
-		LSP_SVQ(lsp, lsp_q_this, lsp_cb_indices);
-		
-		//interpolate q vectors for subframes 4,3,2,1
-		memcpy(q4, lsp_q_this, 10*sizeof(float));
-		for(uint8_t i=0; i<10; i++)
-		{
-			q3[i] = 0.75*q4[i] + 0.25*lsp_q_prev[i];
-			q2[i] = 0.50*q4[i] + 0.50*lsp_q_prev[i];
-			q1[i] = 0.25*q4[i] + 0.75*lsp_q_prev[i];
-		}
-		
-		//do stuff
-		;
-		
-		//update lsp_q_prev
-		memcpy(lsp_q_prev, lsp_q_this, 10*sizeof(float));
-		
-		first=0;
+		first = 0;
 	}
+	
+	//pre processing and windowing
+	Speech_Pre_Process(speech, spch_out);
+	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+	Window_Speech(spch_in, spch_out);
+	
+	//compute LSPs
+	Autocorr(spch_out, r);
+	LD_Solver(r, lp);
+	LP_LSP(lsp_prev, lp, lsp);
+	
+	//LSPs now
+	memcpy(lsp_this, lsp, 10*sizeof(float));
+	
+	//quantize LSPs
+	LSP_SVQ(lsp, q_lsp_this, lsp_cb_indices);
+	
+	//interpolate quantized LSP vector for subframes 4,3,2,1
+	memcpy(q_lsp_4, q_lsp_this, 10*sizeof(float));
+	for(uint8_t i=0; i<10; i++)
+	{
+		q_lsp_3[i] = 0.75*q_lsp_4[i] + 0.25*q_lsp_prev[i];
+		q_lsp_2[i] = 0.50*q_lsp_4[i] + 0.50*q_lsp_prev[i];
+		q_lsp_1[i] = 0.25*q_lsp_4[i] + 0.75*q_lsp_prev[i];
+	}
+	
+	//interpolate unquantized LSP vector for subframes 4,3,2,1
+	memcpy(lsp_4, lsp_this, 10*sizeof(float));
+	for(uint8_t i=0; i<10; i++)
+	{
+		lsp_3[i] = 0.75*lsp_4[i] + 0.25*lsp_prev[i];
+		lsp_2[i] = 0.50*lsp_4[i] + 0.50*lsp_prev[i];
+		lsp_1[i] = 0.25*lsp_4[i] + 0.75*lsp_prev[i];
+	}
+	
+	//now we have both quantized and unquantized LSP vectors for further computations
+	//we can change them back to {a_i} for the A(z)
+	
+	//LSP to A(z) conversion
+	float a[11];
+	LSP_LP(lsp_1, a);
+	
+	
+	
+	//update LSPs
+	memcpy(q_lsp_prev, q_lsp_this, 10*sizeof(float));
+	memcpy(  lsp_prev,   lsp_this, 10*sizeof(float));
 }
 
 //initialize consts
