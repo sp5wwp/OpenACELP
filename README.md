@@ -1,9 +1,9 @@
 # OpenACELP
-Free ACELP vocoder. It is based on **ETSI EN 300-395-2**<sup>[1]</sup> and **TIA/EIA IS-641**<sup>[2]</sup>, but right now it is *not* compatible with any of them (their codebooks can't be published as a part of this codec). **OpenACELP** is an alternative to (great) [Codec 2](https://github.com/drowe67/codec2). It uses floating point arithmetic. I aim to optimize it for the STM32 Cortex-M7, and they have a hardware floating point unit (FPU).
+Free ACELP vocoder. It is based on **ETSI EN 300-395-2**<sup>[1]</sup> and **TIA/EIA IS-641**<sup>[2]</sup>, but it is **not** compatible with any of them (as their codebooks can't be published as a part of this codec). **OpenACELP** is an alternative to (great) [Codec 2](https://github.com/drowe67/codec2). It uses floating point arithmetic. I aim to optimize it for the STM32 Cortex-M7, as they have a hardware floating point unit (FPU).
 
 I'm using TED-LIUM release 1 ([OpenSLR link](http://www.openslr.org/7/), [download](https://projets-lium.univ-lemans.fr/ted-lium/release1/)) as the english speech corpus and [py-lbg](https://github.com/internaut/py-lbg) for codebook generation using Linde-Buzo-Gray (LBG) algorithm.
 
-**Actual phase:** weighted speech signal computation.
+**Actual phase:** closed loop search.
 
 Done:
 - speech framing and windowing (refer to [2], chapter 2.2.1)
@@ -15,3 +15,5 @@ Done:
 - LSP codebooks full search
 - quantized and unquantized LSPs interpolation for each subframe
 - LSP->LP conversion
+- speech weighting filtering ([1] - chapter 4.2.2.4) - looks like it works
+- open-loop pitch search (T_O) - looks like it works too
