@@ -540,11 +540,36 @@ void Init_LSP(float *in1, float *in2)
 	in1[9] = in2[9] = -26000.0/32768.0;
 }
 
+//calculate residual signal
+//based on input speech and A(z) filter coeff. array
+//arg1: output residual signal, arg2: input speech
+//arg3: A(z) coeffs (11), arg4: filter length (basically: subframe length)
+void Residual(int16_t *out, int16_t *inp, float *a, uint8_t len)
+{
+	int32_t tmp;
+	
+	for(uint8_t i=0; i<len; i++)
+	{
+		tmp=inp[i];
+		
+		for(uint8_t j=1; j<=10; j++)
+		{
+			if(i>=j)
+				tmp += a[j] * inp[i-j];
+		}
+		
+		out[i]=tmp/(1<<11);	//make it fit back into the int16_t
+	}
+}
+
 //compute weighted speech for current frame using unquantized LSP params
 //for each subframe
 //arg1: output speech, arg2: input speech, arg3: array of unquantized LSPs
 void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 {
+	//for the intermediate result
+	int16_t spch_tmp[WINDOW_SIZ];
+	
 	float A_nom[11];
 	float A_denom[11];
 	
@@ -561,8 +586,11 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 			A_nom[j]   = a[i][j] * gamma_3[j-1];
 			A_denom[j] = a[i][j] * gamma_4[j-1];
 		}
+
+		//compute the LPC residual by filtering the input speech through A_nom(z)
+		Residual(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_nom, SUBFRAME_SIZ);
 		
-		//
+		//1/A_denom(z)
 		;
 	}
 }
