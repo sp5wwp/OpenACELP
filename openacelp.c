@@ -15,11 +15,13 @@
 
 //-----------------------------ACELP includes & defines------------------------------
 #include "LSP_codebooks.h"
+#include "gamma.h"
 //Global consts
 #define FRAME_LEN		20							//voice frame length in ms
 #define FRAME_SIZ		160							//voice frame samples number, 0.02s*8000Hz
 #define	WINDOW_LEN		30							//length of window for autocorrelation computation
 #define WINDOW_SIZ		240							//window samples number, 0.03s*8000Hz
+#define SUBFRAME_SIZ	WINDOW_SIZ/4
 #define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
 #define GRID_SIZ		60							//grid granularity for LSP computation
 
@@ -419,7 +421,7 @@ void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
 		}
 	}
 	    
-	min   =10000.0;
+	min=10000.0;
 	
 	//codebook 2 search
 	for(uint16_t i=0; i<size_cb2; i++)
@@ -439,7 +441,7 @@ void LSP_SVQ(float *lsp, float *q_lsp, uint16_t *ind)
 		}
 	}
 	  
-	min   =10000.0;
+	min=10000.0;
 	
 	//codebook 3 search
 	for(uint16_t i=0; i<size_cb3; i++)
@@ -520,6 +522,51 @@ void LSP_LP(float *lsp, float *a)
 	}
 }
 
+//initialize "previous" frame LSP vectors
+//arg1: array of LSP unquantized vectors
+//arg2: array of quantized LSP vectors
+//order of args doesnt matter
+void Init_LSP(float *in1, float *in2)
+{
+	in1[0] = in2[0] = 30000.0/32768.0;
+	in1[1] = in2[1] = 26000.0/32768.0;
+	in1[2] = in2[2] = 21000.0/32768.0;
+	in1[3] = in2[3] = 15000.0/32768.0;
+	in1[4] = in2[4] = 8000.0/32768.0;
+	in1[5] = in2[5] = 0.0;
+	in1[6] = in2[6] = -8000.0/32768.0;
+	in1[7] = in2[7] = -15000.0/32768.0;
+	in1[8] = in2[8] = -21000.0/32768.0;
+	in1[9] = in2[9] = -26000.0/32768.0;
+}
+
+//compute weighted speech for current frame using unquantized LSP params
+//for each subframe
+//arg1: output speech, arg2: input speech, arg3: array of unquantized LSPs
+void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
+{
+	float A_nom[11];
+	float A_denom[11];
+	
+	//for each subframe
+	for(uint8_t i=0; i<4; i++)
+	{
+		//compute nominator and denominator polynomial coeffs
+		//for the speech weighting filter
+		//leaving the leading 1.0s alone
+		A_nom[0]=A_denom[0]=a[i][0];
+		
+		for(uint8_t j=1; j<11; j++)
+		{
+			A_nom[j]   = a[i][j] * gamma_3[j-1];
+			A_denom[j] = a[i][j] * gamma_4[j-1];
+		}
+		
+		//
+		;
+	}
+}
+
 //encode voice frame
 //arg1: input speech samples, 16-bit signed integer, arg2: 137 unpacked output bits
 void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
@@ -534,8 +581,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	int16_t spch_out[WINDOW_SIZ];
 	
 	int32_t		r[11];									//autocorrelation values
-	float		lp[11];									//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
-	float		lsp[10];								//LSP coeffs in cosine domain
+	float		lp[4][11];								//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
 	
 	//quantized and unquantized LSP vectors from the previous frame and this one
 	static float q_lsp_prev[10];
@@ -547,32 +593,18 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	uint16_t lsp_cb_indices[3];
 	
 	//quantized LSP vector interpolation for 4 subframes
-	float q_lsp_1[10];
-	float q_lsp_2[10];
-	float q_lsp_3[10];
-	float q_lsp_4[10];
+	float q_lsp[4][10];
 	
-	//"real", unquantized LSP vector interpolation for 4 subframes
-	float lsp_1[10];
-	float lsp_2[10];
-	float lsp_3[10];
-	float lsp_4[10];
+	//unquantized LSP vector interpolation for 4 subframes
+	float lsp[4][10];
 	
-	//first frame? initialize "previous" frame LSP vectors
+	//first frame? 
 	if(first)
 	{
 		//previous quantized LSP vector
-		lsp_prev[0] = q_lsp_prev[0] = 30000.0/32768.0;
-		lsp_prev[1] = q_lsp_prev[1] = 26000.0/32768.0;
-		lsp_prev[2] = q_lsp_prev[2] = 21000.0/32768.0;
-		lsp_prev[3] = q_lsp_prev[3] = 15000.0/32768.0;
-		lsp_prev[4] = q_lsp_prev[4] = 8000.0/32768.0;
-		lsp_prev[5] = q_lsp_prev[5] = 0.0;
-		lsp_prev[6] = q_lsp_prev[6] = -8000.0/32768.0;
-		lsp_prev[7] = q_lsp_prev[7] = -15000.0/32768.0;
-		lsp_prev[8] = q_lsp_prev[8] = -21000.0/32768.0;
-		lsp_prev[9] = q_lsp_prev[9] = -26000.0/32768.0;
+		Init_LSP(lsp_prev, q_lsp_prev);
 		
+		//set flag to zero
 		first = 0;
 	}
 	
@@ -581,44 +613,46 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
 	Window_Speech(spch_in, spch_out);
 	
-	//compute LSPs
+	//compute LSPs for actual frame
 	Autocorr(spch_out, r);
-	LD_Solver(r, lp);
-	LP_LSP(lsp_prev, lp, lsp);
-	
-	//LSPs now
-	memcpy(lsp_this, lsp, 10*sizeof(float));
+	LD_Solver(r, &lp[3][0]);
+	LP_LSP(lsp_prev, &lp[3][0], lsp_this);
+	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
 	
 	//quantize LSPs
-	LSP_SVQ(lsp, q_lsp_this, lsp_cb_indices);
+	LSP_SVQ(lsp_this, q_lsp_this, lsp_cb_indices);
 	
-	//interpolate quantized LSP vector for subframes 4,3,2,1
-	memcpy(q_lsp_4, q_lsp_this, 10*sizeof(float));
+	//interpolate quantized LSP vector for subframes 4,3,2,1 (indexes are 3,2,1,0)
+	memcpy(q_lsp[3], q_lsp_this, 10*sizeof(float));
 	for(uint8_t i=0; i<10; i++)
 	{
-		q_lsp_3[i] = 0.75*q_lsp_4[i] + 0.25*q_lsp_prev[i];
-		q_lsp_2[i] = 0.50*q_lsp_4[i] + 0.50*q_lsp_prev[i];
-		q_lsp_1[i] = 0.25*q_lsp_4[i] + 0.75*q_lsp_prev[i];
+		q_lsp[2][i] = 0.75*q_lsp[3][i] + 0.25*q_lsp_prev[i];
+		q_lsp[1][i] = 0.50*q_lsp[3][i] + 0.50*q_lsp_prev[i];
+		q_lsp[0][i] = 0.25*q_lsp[3][i] + 0.75*q_lsp_prev[i];
 	}
 	
-	//interpolate unquantized LSP vector for subframes 4,3,2,1
-	memcpy(lsp_4, lsp_this, 10*sizeof(float));
+	//interpolate unquantized LSP vector for subframes 4,3,2,1 (indexes are 3,2,1,0)
+	//computed LSPs are used for subframe 4 (index 3)
+	memcpy(&lsp[3], lsp_this, 10*sizeof(float));
 	for(uint8_t i=0; i<10; i++)
 	{
-		lsp_3[i] = 0.75*lsp_4[i] + 0.25*lsp_prev[i];
-		lsp_2[i] = 0.50*lsp_4[i] + 0.50*lsp_prev[i];
-		lsp_1[i] = 0.25*lsp_4[i] + 0.75*lsp_prev[i];
+		lsp[2][i] = 0.75*lsp[3][i] + 0.25*lsp_prev[i];
+		lsp[1][i] = 0.50*lsp[3][i] + 0.50*lsp_prev[i];
+		lsp[0][i] = 0.25*lsp[3][i] + 0.75*lsp_prev[i];
 	}
 	
 	//now we have both quantized and unquantized LSP vectors for further computations
 	//we can change them back to {a_i} for the A(z)
 	
-	//LSP to A(z) conversion for this frame
-	float az[11];
-	LSP_LP(lsp_this, az);
+	//unquantized LSP to A(z) conversion for this frame
+	for(uint8_t i=0; i<4; i++)
+		LSP_LP(&lsp[i][0], &lp[i][0]);
 	
 	//"pole-zero type weighting procedure"
-	//filtering
+	//calculating weighted filter coeffs
+	Speech_Weighting(spch_out, spch_in, lp);
+	
+	//
 	;
 	
 	//update LSPs
