@@ -21,13 +21,14 @@
 #define FRAME_SIZ		160							//voice frame samples number, 0.02s*8000Hz
 #define	WINDOW_LEN		30							//length of window for autocorrelation computation
 #define WINDOW_SIZ		240							//window samples number, 0.03s*8000Hz
-#define SUBFRAME_SIZ	WINDOW_SIZ/4
+#define SUBFRAME_SIZ	(WINDOW_SIZ/4)				//subframe length in samples
 #define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
 #define GRID_SIZ		60							//grid granularity for LSP computation
 
 //Global vars
 float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
 float		grid[GRID_SIZ];							//grid of values for LSP computation
+int16_t		filter_mem[SUBFRAME_SIZ];				//memory for filter computations (recursive part)
 
 uint64_t	frame = 0;								//frame number - for our info
 
@@ -540,25 +541,59 @@ void Init_LSP(float *in1, float *in2)
 	in1[9] = in2[9] = -26000.0/32768.0;
 }
 
-//calculate residual signal
+//calculate filtered signal
 //based on input speech and A(z) filter coeff. array
-//arg1: output residual signal, arg2: input speech
-//arg3: A(z) coeffs (11), arg4: filter length (basically: subframe length)
-void Residual(int16_t *out, int16_t *inp, float *a, uint8_t len)
+//arg1: output signal, arg2: input speech
+//arg3: nominator coeffs, arg4: denominator coeffs, arg5: filter length (basically: subframe length)
+//arg5: memory for recursive filter, NULL if not needed
+//TODO: I'm not sure, if this filtering works properly. Looks like it does...
+void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t *mem)
 {
-	int32_t tmp;
+	float tmp;
 	
-	for(uint8_t i=0; i<len; i++)
+	if(mem==NULL)
 	{
-		tmp=inp[i];
-		
-		for(uint8_t j=1; j<=10; j++)
+		for(uint8_t n=0; n<len; n++)
 		{
-			if(i>=j)
-				tmp += a[j] * inp[i-j];
+			tmp=inp[n];
+			
+			for(uint8_t i=1; i<=10; i++)
+			{
+				if(n>=i)
+					tmp += a[i] * inp[n-i];
+			}
+			for(uint8_t i=1; i<=10; i++)
+			{
+				if(n>=i)
+					tmp += b[i] * out[n-i];
+			}
+			
+			out[n]=(int16_t)(tmp/3.5);	//make it fit back into the int16_t
+		}
+	}
+	else
+	{
+		for(uint8_t n=0; n<len; n++)
+		{
+			tmp=inp[n];
+			
+			for(uint8_t i=1; i<=10; i++)
+			{
+				if(n>=i)
+					tmp += a[i] * inp[n-i];
+			}
+			for(uint8_t i=1; i<=10; i++)
+			{
+				if(n>=i)
+					tmp += a[i] * out[n-i];
+				else
+					tmp += b[i] * mem[SUBFRAME_SIZ+(n-i)];
+			}
+			
+			out[n]=(int16_t)(tmp/11.0);	//make it fit back into the int16_t
 		}
 		
-		out[i]=tmp/(1<<11);	//make it fit back into the int16_t
+		memcpy(mem, out, SUBFRAME_SIZ);
 	}
 }
 
@@ -570,6 +605,8 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 	//for the intermediate result
 	int16_t spch_tmp[WINDOW_SIZ];
 	
+	//nominator and denominator
+	//of the filter transfer function
 	float A_nom[11];
 	float A_denom[11];
 	
@@ -587,12 +624,26 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 			A_denom[j] = a[i][j] * gamma_4[j-1];
 		}
 
-		//compute the LPC residual by filtering the input speech through A_nom(z)
-		Residual(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_nom, SUBFRAME_SIZ);
-		
-		//1/A_denom(z)
-		;
+		//filter the input speech through A_nom(z)/A_denom(z)
+		Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_nom, A_denom, SUBFRAME_SIZ, filter_mem);
 	}
+	
+	//test
+	if(frame==34)
+	{
+		for(uint8_t i=0; i<11; i++)
+		{
+			printf("%f\n", A_nom[i]);
+		}
+		printf("\n");
+		for(uint8_t i=0; i<11; i++)
+		{
+			printf("%f\n", A_denom[i]);
+		}
+	}
+	
+	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		spch_out[i]=spch_tmp[i];
 }
 
 //encode voice frame
@@ -681,7 +732,13 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	Speech_Weighting(spch_out, spch_in, lp);
 	
 	//
-	;
+	if(frame==34)
+	{
+		for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		{
+			printf("%d|%d\n", spch_in[i], spch_out[i]);
+		}
+	}
 	
 	//update LSPs
 	memcpy(q_lsp_prev, q_lsp_this, 10*sizeof(float));
@@ -689,10 +746,13 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 }
 
 //initialize consts
-void ACELP_Init(float *search_grid, float *analysis_window)
+//arg1: root search grid, arg2: modified Hamming window
+//arg3: memory for recursive part of speech weighting filter
+void ACELP_Init(float *search_grid, float *analysis_window, int16_t *mem)
 {
 	Grid_Generate(search_grid);
 	Analysis_Window_Init(analysis_window);
+	memset(mem, 0, SUBFRAME_SIZ*sizeof(int16_t));
 }
 
 //main routine
@@ -717,7 +777,7 @@ int main(uint8_t argc, uint8_t *argv[])
 		else
 		{
 			//initialize consts etc.
-			ACELP_Init(grid, w);
+			ACELP_Init(grid, w, filter_mem);
 			
 			//load 30ms frames, overlapping
 			while(fread(spch, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
@@ -727,7 +787,7 @@ int main(uint8_t argc, uint8_t *argv[])
 				//take us 10ms back (80 samples * sizeof(int16_t))
 				fseek(aud, -160, 1);
 				
-				printf("Frame %d\n", frame);
+				//printf("Frame %d\n", frame);
 				
 				ACELP_EncodeFrame(spch, NULL);
 			}
