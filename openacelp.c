@@ -545,7 +545,7 @@ void Init_LSP(float *in1, float *in2)
 //based on input speech and A(z) filter coeff. array
 //arg1: output signal, arg2: input speech
 //arg3: nominator coeffs, arg4: denominator coeffs, arg5: filter length (basically: subframe length)
-//arg5: memory for recursive filter, NULL if not needed
+//arg6: memory for recursive filter, NULL if not needed
 //TODO: I'm not sure, if this filtering works properly. Looks like it does...
 void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t *mem)
 {
@@ -568,7 +568,7 @@ void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t
 					tmp += b[i] * out[n-i];
 			}
 			
-			out[n]=(int16_t)(tmp/3.5);	//make it fit back into the int16_t
+			out[n]=(int16_t)(tmp/11.0);	//make it fit back into the int16_t
 		}
 	}
 	else
@@ -599,7 +599,8 @@ void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t
 
 //compute weighted speech for current frame using unquantized LSP params
 //for each subframe
-//arg1: output speech, arg2: input speech, arg3: array of unquantized LSPs
+//arg1: output speech, arg2: input speech
+//arg3: array of unquantized LSPs
 void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 {
 	//for the intermediate result
@@ -629,7 +630,7 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 	}
 	
 	//test
-	if(frame==34)
+	/*if(frame==34)
 	{
 		for(uint8_t i=0; i<11; i++)
 		{
@@ -640,14 +641,94 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 		{
 			printf("%f\n", A_denom[i]);
 		}
-	}
+	}*/
 	
+	//move from buffer to the output
 	for(uint8_t i=0; i<WINDOW_SIZ; i++)
 		spch_out[i]=spch_tmp[i];
 }
 
+//find open loop pitch, once per frame
+//arg1: input weighted speech, arg2: frame length
+//retval: integer T_0 pitch value
+uint8_t Find_Pitch(int16_t *spch, uint16_t len)
+{
+	float C[142];
+	float max_C[3]={0.0, 0.0, 0.0};	//values
+	uint8_t ind[3]={20, 40, 80};	//indices
+	
+	memset(C, 0, 142*sizeof(float));
+	
+	//first range
+	for(uint8_t k=20; k<=39; k++)
+	{
+		for(uint8_t j=0; j<120; j++)
+		{
+			if(2*j>=k)
+				C[k] += spch[2*j] * spch[2*j-k];
+		}
+		if(C[k] > max_C[0])
+		{
+			max_C[0] = C[k];
+			ind[0] = k;
+		}
+	}
+	//second range
+	for(uint8_t k=40; k<=79; k++)
+	{
+		for(uint8_t j=0; j<120; j++)
+		{
+			if(2*j>=k)
+				C[k] += spch[2*j] * spch[2*j-k];
+		}
+		if(C[k] > max_C[1])
+		{
+			max_C[1] = C[k];
+			ind[1] = k;
+		}
+	}
+	//third range
+	for(uint8_t k=80; k<=142; k++)
+	{
+		for(uint8_t j=0; j<120; j++)
+		{
+			if(2*j>=k)
+				C[k] += spch[2*j] * spch[2*j-k];
+		}
+		if(C[k] > max_C[2])
+		{
+			max_C[2] = C[k];
+			ind[2] = k;
+		}
+	}
+	
+	//normalization of C_k maxima
+	//divide by normalization factor
+	float norm;
+	
+	for(uint8_t j=0; j<3; j++)
+	{
+		norm=0.0;
+		
+		for(uint8_t i=abs(ind[j]%2); i<(WINDOW_SIZ-ind[j]); i+=2)
+		{
+			norm += spch[i]*spch[i];
+		}
+		
+		max_C[j] /= sqrt(norm);
+	}
+	
+	//find max
+	if(max_C[0] > max_C[1] * 0.85)
+		return ind[0];
+	else if(max_C[1] > max_C[2] * 0.85)
+		return ind[1];
+	else
+		return ind[2];
+}
+
 //encode voice frame
-//arg1: input speech samples, 16-bit signed integer, arg2: 137 unpacked output bits
+//arg1: input speech samples, 16-bit signed integer (this frame), arg2: 137 unpacked output bits
 void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 {
 	//first call of this function?
@@ -658,6 +739,9 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	//local buffers for speech frame manipulation
 	int16_t spch_in[WINDOW_SIZ];
 	int16_t spch_out[WINDOW_SIZ];
+	
+	//windowed frame
+	int16_t w_spch[WINDOW_SIZ];
 	
 	int32_t		r[11];									//autocorrelation values
 	float		lp[4][11];								//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
@@ -691,6 +775,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	Speech_Pre_Process(speech, spch_out);
 	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
 	Window_Speech(spch_in, spch_out);
+	memcpy(w_spch, spch_out, WINDOW_SIZ*sizeof(int16_t)); //save for later
 	
 	//compute LSPs for actual frame
 	Autocorr(spch_out, r);
@@ -728,17 +813,14 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 		LSP_LP(&lsp[i][0], &lp[i][0]);
 	
 	//"pole-zero type weighting procedure"
-	//calculating weighted filter coeffs
+	//calculating weighted speech
+	//basically that's emphasizing formants
+	//for easier pitch detection
 	Speech_Weighting(spch_out, spch_in, lp);
 	
-	//
-	if(frame==34)
-	{
-		for(uint8_t i=0; i<WINDOW_SIZ; i++)
-		{
-			printf("%d|%d\n", spch_in[i], spch_out[i]);
-		}
-	}
+	//find open loop pitch
+	uint8_t T_0 = Find_Pitch(spch_out, WINDOW_SIZ);
+	printf("%d\n", T_0);
 	
 	//update LSPs
 	memcpy(q_lsp_prev, q_lsp_this, 10*sizeof(float));
@@ -760,7 +842,8 @@ void ACELP_Init(float *search_grid, float *analysis_window, int16_t *mem)
 int main(uint8_t argc, uint8_t *argv[])
 {
 	FILE *aud;
-	int16_t spch[WINDOW_SIZ];
+	int16_t spch[WINDOW_SIZ];			//this frame
+	int16_t prev_spch[WINDOW_SIZ];		//previous frame
 	
 	if(argc==2)
 	{
