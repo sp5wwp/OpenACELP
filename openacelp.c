@@ -81,7 +81,7 @@ void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 	
 	outp[0]=inp[0]/2;
 	
-	for(uint8_t i=1; i<WINDOW_SIZ; i++)
+	for(uint16_t i=1; i<WINDOW_SIZ; i++)
 	{
 		outp[i] = inp[i]/2 - inp[i-1]/2 + ALPHA*outp[i-1];
 	}
@@ -728,9 +728,6 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	int16_t spch_in[WINDOW_SIZ];
 	int16_t spch_out[WINDOW_SIZ];
 	
-	//windowed frame
-	int16_t w_spch[WINDOW_SIZ];
-	
 	int32_t		r[11];									//autocorrelation values
 	float		lp[4][11];								//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
 	
@@ -761,9 +758,9 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	
 	//pre processing and windowing
 	Speech_Pre_Process(speech, spch_out);
-	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
+	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));			//swap buffers
+	memcpy(prev_spch_frame, spch_out, FRAME_SIZ*sizeof(int16_t));	//save pre-processed frame for later
 	Window_Speech(spch_in, spch_out);
-	memcpy(w_spch, spch_out, WINDOW_SIZ*sizeof(int16_t)); //save for later
 	
 	//compute LSPs for actual frame
 	Autocorr(spch_out, r);
@@ -802,8 +799,6 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	
 	//"pole-zero type weighting procedure"
 	//calculating weighted speech
-	//basically that's emphasizing formants
-	//for easier pitch detection
 	Speech_Weighting(spch_out, spch_in, lp);
 	
 	//find open loop pitch
@@ -859,7 +854,7 @@ int main(uint8_t argc, uint8_t *argv[])
 				//take us 40 samples back (40 samples * sizeof(int16_t))
 				fseek(aud, -80, 1);
 				
-				printf("Frame %d\n", frame);
+				//printf("Frame %d\n", frame);
 				
 				ACELP_EncodeFrame(spch, NULL);
 			}
