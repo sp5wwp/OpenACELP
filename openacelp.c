@@ -603,11 +603,30 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 		}
 
 		//filter the input speech through A_num(z)/A_denom(z)
-		Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_num, A_denom, SUBFRAME_SIZ, prev_spch_frame, prev_w_spch_frame);
+		if(i==0)
+		{
+			Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_num, A_denom, SUBFRAME_SIZ,
+					&prev_spch_frame[FRAME_SIZ-60], &prev_w_spch_frame[FRAME_SIZ-60]);
+			if(frame==23)
+			{
+				for(uint8_t j=0; j<60; j++)
+					printf("%d\n", prev_w_spch_frame[FRAME_SIZ-60+j]);
+			}
+		}
+		else
+		{
+			Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_num, A_denom, SUBFRAME_SIZ,
+					&spch_in[SUBFRAME_SIZ*(i-1)], &spch_tmp[SUBFRAME_SIZ*(i-1)]);
+			if(frame==23)
+			{
+				for(uint8_t j=0; j<60; j++)
+					printf("%d\n", spch_tmp[SUBFRAME_SIZ*(i-1)+j]);
+			}
+		}
 	}
 	
 	//test
-	/*if(frame==34)
+	/*if(frame==23)
 	{
 		for(uint8_t i=0; i<11; i++)
 		{
@@ -727,6 +746,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	//local buffers for speech frame manipulation
 	int16_t spch_in[WINDOW_SIZ];
 	int16_t spch_out[WINDOW_SIZ];
+	int16_t spch_tmp[FRAME_SIZ];	//temporary buffer
 	
 	int32_t		r[11];									//autocorrelation values
 	float		lp[4][11];								//LP coeffs (10, but starting from lp[1], lp[0]=1.0)
@@ -758,15 +778,14 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	
 	//pre processing and windowing
 	Speech_Pre_Process(speech, spch_out);
-	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));			//swap buffers
-	memcpy(prev_spch_frame, spch_out, FRAME_SIZ*sizeof(int16_t));	//save pre-processed frame for later
+	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));		//swap buffers
+	memcpy(spch_tmp, spch_out, FRAME_SIZ*sizeof(int16_t));		//save pre-processed frame for later
 	Window_Speech(spch_in, spch_out);
 	
 	//compute LSPs for actual frame
 	Autocorr(spch_out, r);
 	LD_Solver(r, &lp[3][0]);
 	LP_LSP(lsp_prev, &lp[3][0], lsp_this);
-	memcpy(spch_in, spch_out, WINDOW_SIZ*sizeof(int16_t));
 	
 	//quantize LSPs
 	LSP_SVQ(lsp_this, q_lsp_this, lsp_cb_indices);
@@ -799,11 +818,23 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	
 	//"pole-zero type weighting procedure"
 	//calculating weighted speech
+	//input - pre-processed speech
 	Speech_Weighting(spch_out, spch_in, lp);
+	
+	/*if(frame==23)
+	{
+		printf("----\n");
+		for(uint16_t i=0; i<FRAME_SIZ; i++)
+			printf("%d\n", spch_in[i]);
+	}*/
 	
 	//find open loop pitch
 	uint8_t T_0 = Find_Pitch(spch_out, prev_w_spch_frame);
 	printf("%d\n", T_0);
+	
+	//update speech
+	memcpy(prev_w_spch_frame, spch_out, FRAME_SIZ*sizeof(int16_t));
+	memcpy(prev_spch_frame, spch_tmp, FRAME_SIZ*sizeof(int16_t));
 	
 	//update LSPs
 	memcpy(q_lsp_prev, q_lsp_this, 10*sizeof(float));
