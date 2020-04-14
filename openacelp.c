@@ -17,18 +17,19 @@
 #include "LSP_codebooks.h"
 #include "gamma.h"
 //Global consts
-#define FRAME_LEN		20							//voice frame length in ms
-#define FRAME_SIZ		160							//voice frame samples number, 0.02s*8000Hz
-#define	WINDOW_LEN		30							//length of window for autocorrelation computation
-#define WINDOW_SIZ		240							//window samples number, 0.03s*8000Hz
-#define SUBFRAME_SIZ	(WINDOW_SIZ/4)				//subframe length in samples
+#define FRAME_SIZ		240							//voice frame samples number, 0.03s*8000Hz
+#define LOOK_AHEAD		40							//40 samples of look-ahead for the LPC analysis
+#define WINDOW_SIZ		(FRAME_SIZ+LOOK_AHEAD)		//window for LPC analysis samples number
+#define SUBFRAME_SIZ	(FRAME_SIZ/4)				//subframe length in samples
 #define ALPHA			(float)32735.0/32768.0		//alpha coeff for the pre-processing filter
 #define GRID_SIZ		60							//grid granularity for LSP computation
 
 //Global vars
 float		w[WINDOW_SIZ];							//modified Hamming window w(n) coeffs for speech analysis
 float		grid[GRID_SIZ];							//grid of values for LSP computation
-int16_t		filter_mem[SUBFRAME_SIZ];				//memory for filter computations (recursive part)
+
+int16_t		prev_spch_frame[FRAME_SIZ];				//previous speech frame
+int16_t		prev_w_spch_frame[FRAME_SIZ];			//previous speech frame (weighted)
 
 uint64_t	frame = 0;								//frame number - for our info
 
@@ -89,14 +90,14 @@ void Speech_Pre_Process(int16_t *inp, int16_t *outp)
 //compute the modified Hamming window w(n) coeffs for speech analysis
 void Analysis_Window_Init(float *w)
 {
-	uint8_t L2 = 40;				//40 samples look ahead
-	uint8_t L1 = WINDOW_SIZ-L2;		//200 samples
+	uint16_t L2 = LOOK_AHEAD;		//40 samples look ahead
+	uint16_t L1 = FRAME_SIZ;		//240 samples
 	
-	for(uint8_t i=0; i<L1; i++)
+	for(uint16_t i=0; i<L1; i++)
 	{
 		w[i] = 0.54 - 0.46 * cos((M_PI*i)/((float)L1-1.0));
 	}
-	for(uint8_t i=L1; i< L1+L2; i++)
+	for(uint16_t i=L1; i< L1+L2; i++)
 	{
 		w[i] = 0.54 + 0.46 * cos((M_PI*(i-L1))/((float)L2-1.0));
 	}
@@ -105,7 +106,7 @@ void Analysis_Window_Init(float *w)
 //multiply processed speech samples with modified Hamming window
 void Window_Speech(int16_t *inp, int16_t *outp)
 {
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+	for(uint16_t i=0; i<WINDOW_SIZ; i++)
 		outp[i] = inp[i] * w[i];
 }
 
@@ -129,14 +130,14 @@ void Autocorr(int16_t *spch, int32_t *r)
 		ovf = 0;
 		tmp = 0;
 		
-		for(uint8_t i=0; i<WINDOW_SIZ; i++)
+		for(uint16_t i=0; i<WINDOW_SIZ; i++)
 		{
 			tmp += (int64_t)spch[i] * (int64_t)spch[i];
 		
 			if(tmp > (int64_t)INT32_MAX)	//overflow occured?
 			{
 				//divide the signal by 4
-				for(uint8_t j=0; j<WINDOW_SIZ; j++)
+				for(uint16_t j=0; j<WINDOW_SIZ; j++)
 					spch[j] /= 4;
 				
 				ovf = 1;
@@ -169,7 +170,7 @@ void Autocorr(int16_t *spch, int32_t *r)
 	//r[1]..r[10] calculation
 	for(uint8_t i=1; i<=10; i++)
 	{
-		for(uint8_t j=0; j<WINDOW_SIZ; j++)
+		for(uint16_t j=0; j<WINDOW_SIZ; j++)
 			r[i] += spch[j] * spch[j-i];
 			
 		//normalize
@@ -241,7 +242,6 @@ void LD_Solver(int32_t *r, float *a)
 		
 		//test for filter stability
 		//if case of instability, use previous coeffs
-		//TODO: something might be wrong with this check
 		if(fabs(k) > 32750.0/32767.0)	//close enough to 1.0
 		{
 			memcpy(a, prev_a, 11*sizeof(float));
@@ -544,56 +544,33 @@ void Init_LSP(float *in1, float *in2)
 //calculate filtered signal
 //based on input speech and A(z) filter coeff. array
 //arg1: output signal, arg2: input speech
-//arg3: nominator coeffs, arg4: denominator coeffs, arg5: filter length (basically: subframe length)
-//arg6: memory for recursive filter, NULL if not needed
+//arg3: numerator coeffs, arg4: denominator coeffs, arg5: filter length (basically: subframe length)
+//arg6: previous speech frame, arg7: previous speech frame (weighted)
 //TODO: I'm not sure, if this filtering works properly. Looks like it does...
-void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t *mem)
+void Filter(int16_t *out, int16_t *inp, float *b, float *a, uint8_t len, int16_t *prev_s, int16_t *prev_w_s)
 {
 	float tmp;
 	
-	if(mem==NULL)
+	for(uint8_t n=0; n<len; n++)
 	{
-		for(uint8_t n=0; n<len; n++)
+		tmp=inp[n];
+		
+		for(uint8_t i=1; i<=10; i++)
 		{
-			tmp=inp[n];
-			
-			for(uint8_t i=1; i<=10; i++)
-			{
-				if(n>=i)
-					tmp += a[i] * inp[n-i];
-			}
-			for(uint8_t i=1; i<=10; i++)
-			{
-				if(n>=i)
-					tmp += b[i] * out[n-i];
-			}
-			
-			out[n]=(int16_t)(tmp/11.0);	//make it fit back into the int16_t
+			if(n>=i)
+				tmp += b[i] * inp[n-i];
+			else
+				tmp += b[i] * prev_s[FRAME_SIZ+(n-i)];
 		}
-	}
-	else
-	{
-		for(uint8_t n=0; n<len; n++)
+		for(uint8_t i=1; i<=10; i++)
 		{
-			tmp=inp[n];
-			
-			for(uint8_t i=1; i<=10; i++)
-			{
-				if(n>=i)
-					tmp += a[i] * inp[n-i];
-			}
-			for(uint8_t i=1; i<=10; i++)
-			{
-				if(n>=i)
-					tmp += a[i] * out[n-i];
-				else
-					tmp += b[i] * mem[SUBFRAME_SIZ+(n-i)];
-			}
-			
-			out[n]=(int16_t)(tmp/11.0);	//make it fit back into the int16_t
+			if(n>=i)
+				tmp += a[i] * out[n-i];
+			else
+				tmp += a[i] * prev_w_s[FRAME_SIZ+(n-i)];
 		}
 		
-		memcpy(mem, out, SUBFRAME_SIZ);
+		out[n]=(int16_t)(tmp/11.0);	//make it fit back into the int16_t
 	}
 }
 
@@ -604,29 +581,29 @@ void Filter(int16_t *out, int16_t *inp, float *a, float *b, uint8_t len, int16_t
 void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 {
 	//for the intermediate result
-	int16_t spch_tmp[WINDOW_SIZ];
+	int16_t spch_tmp[FRAME_SIZ];
 	
-	//nominator and denominator
+	//numerator and denominator
 	//of the filter transfer function
-	float A_nom[11];
+	float A_num[11];
 	float A_denom[11];
 	
 	//for each subframe
 	for(uint8_t i=0; i<4; i++)
 	{
-		//compute nominator and denominator polynomial coeffs
+		//compute numerator and denominator polynomial coeffs
 		//for the speech weighting filter
 		//leaving the leading 1.0s alone
-		A_nom[0]=A_denom[0]=a[i][0];
+		A_num[0]=A_denom[0]=a[i][0];
 		
-		for(uint8_t j=1; j<11; j++)
+		for(uint8_t j=1; j<=10; j++)
 		{
-			A_nom[j]   = a[i][j] * gamma_3[j-1];
+			A_num[j]   = a[i][j] * gamma_3[j-1];
 			A_denom[j] = a[i][j] * gamma_4[j-1];
 		}
 
-		//filter the input speech through A_nom(z)/A_denom(z)
-		Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_nom, A_denom, SUBFRAME_SIZ, filter_mem);
+		//filter the input speech through A_num(z)/A_denom(z)
+		Filter(&spch_tmp[SUBFRAME_SIZ*i], &spch_in[SUBFRAME_SIZ*i], A_num, A_denom, SUBFRAME_SIZ, prev_spch_frame, prev_w_spch_frame);
 	}
 	
 	//test
@@ -634,7 +611,7 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 	{
 		for(uint8_t i=0; i<11; i++)
 		{
-			printf("%f\n", A_nom[i]);
+			printf("%f\n", A_num[i]);
 		}
 		printf("\n");
 		for(uint8_t i=0; i<11; i++)
@@ -644,14 +621,15 @@ void Speech_Weighting(int16_t *spch_out, int16_t *spch_in, float a[][11])
 	}*/
 	
 	//move from buffer to the output
-	for(uint8_t i=0; i<WINDOW_SIZ; i++)
+	for(uint8_t i=0; i<FRAME_SIZ; i++)
 		spch_out[i]=spch_tmp[i];
 }
 
 //find open loop pitch, once per frame
-//arg1: input weighted speech, arg2: frame length
+//arg1: input weighted speech, arg2: input previous weighted speech
+//arg3: frame length
 //retval: integer T_0 pitch value
-uint8_t Find_Pitch(int16_t *spch, uint16_t len)
+uint8_t Find_Pitch(int16_t *spch, int16_t *prev_s_w)
 {
 	float C[142];
 	float max_C[3]={0.0, 0.0, 0.0};	//values
@@ -666,6 +644,8 @@ uint8_t Find_Pitch(int16_t *spch, uint16_t len)
 		{
 			if(2*j>=k)
 				C[k] += spch[2*j] * spch[2*j-k];
+			else
+				C[k] += spch[2*j] * prev_s_w[FRAME_SIZ+(2*j-k)];
 		}
 		if(C[k] > max_C[0])
 		{
@@ -680,6 +660,8 @@ uint8_t Find_Pitch(int16_t *spch, uint16_t len)
 		{
 			if(2*j>=k)
 				C[k] += spch[2*j] * spch[2*j-k];
+			else
+				C[k] += spch[2*j] * prev_s_w[FRAME_SIZ+(2*j-k)];
 		}
 		if(C[k] > max_C[1])
 		{
@@ -694,6 +676,8 @@ uint8_t Find_Pitch(int16_t *spch, uint16_t len)
 		{
 			if(2*j>=k)
 				C[k] += spch[2*j] * spch[2*j-k];
+			else
+				C[k] += spch[2*j] * prev_s_w[FRAME_SIZ+(2*j-k)];
 		}
 		if(C[k] > max_C[2])
 		{
@@ -706,16 +690,20 @@ uint8_t Find_Pitch(int16_t *spch, uint16_t len)
 	//divide by normalization factor
 	float norm;
 	
-	for(uint8_t j=0; j<3; j++)
+	for(uint8_t i=0; i<3; i++)
 	{
 		norm=0.0;
 		
-		for(uint8_t i=abs(ind[j]%2); i<(WINDOW_SIZ-ind[j]); i+=2)
+		//TODO: fix this
+		for(int16_t n=0; n<FRAME_SIZ; n++)
 		{
-			norm += spch[i]*spch[i];
+			if(n>=ind[i])
+				norm += spch[n-ind[i]]*spch[n-ind[i]];
+			else
+				norm += prev_s_w[FRAME_SIZ+(n-ind[i])]*prev_s_w[FRAME_SIZ+(n-ind[i])];
 		}
 		
-		max_C[j] /= sqrt(norm);
+		max_C[i] /= sqrt(norm);
 	}
 	
 	//find max
@@ -819,7 +807,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	Speech_Weighting(spch_out, spch_in, lp);
 	
 	//find open loop pitch
-	uint8_t T_0 = Find_Pitch(spch_out, WINDOW_SIZ);
+	uint8_t T_0 = Find_Pitch(spch_out, prev_w_spch_frame);
 	printf("%d\n", T_0);
 	
 	//update LSPs
@@ -829,12 +817,13 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 
 //initialize consts
 //arg1: root search grid, arg2: modified Hamming window
-//arg3: memory for recursive part of speech weighting filter
-void ACELP_Init(float *search_grid, float *analysis_window, int16_t *mem)
+//arg3,4: memory for speech weighting filter
+void ACELP_Init(float *search_grid, float *analysis_window, int16_t *f_mem1, int16_t *f_mem2)
 {
 	Grid_Generate(search_grid);
 	Analysis_Window_Init(analysis_window);
-	memset(mem, 0, SUBFRAME_SIZ*sizeof(int16_t));
+	memset(f_mem1, 0, FRAME_SIZ*sizeof(int16_t));
+	memset(f_mem2, 0, FRAME_SIZ*sizeof(int16_t));
 }
 
 //main routine
@@ -842,8 +831,8 @@ void ACELP_Init(float *search_grid, float *analysis_window, int16_t *mem)
 int main(uint8_t argc, uint8_t *argv[])
 {
 	FILE *aud;
+	
 	int16_t spch[WINDOW_SIZ];			//this frame
-	int16_t prev_spch[WINDOW_SIZ];		//previous frame
 	
 	if(argc==2)
 	{
@@ -858,19 +847,19 @@ int main(uint8_t argc, uint8_t *argv[])
 			return 1;
 		}
 		else
-		{
+		{			
 			//initialize consts etc.
-			ACELP_Init(grid, w, filter_mem);
+			ACELP_Init(grid, w, prev_spch_frame, prev_w_spch_frame);
 			
 			//load 30ms frames, overlapping
 			while(fread(spch, 2, WINDOW_SIZ, aud)==WINDOW_SIZ)
 			{
 				frame++;
 				
-				//take us 10ms back (80 samples * sizeof(int16_t))
-				fseek(aud, -160, 1);
+				//take us 40 samples back (40 samples * sizeof(int16_t))
+				fseek(aud, -80, 1);
 				
-				//printf("Frame %d\n", frame);
+				printf("Frame %d\n", frame);
 				
 				ACELP_EncodeFrame(spch, NULL);
 			}
