@@ -790,7 +790,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 	//quantize LSPs
 	LSP_SVQ(lsp_this, q_lsp_this, lsp_cb_indices);
 	
-	//interpolate quantized LSP vector for subframes 4,3,2,1 (indexes are 3,2,1,0)
+	//interpolate quantized LSP vector for subframes 4,3,2,1 (indices are 3,2,1,0)
 	memcpy(q_lsp[3], q_lsp_this, 10*sizeof(float));
 	for(uint8_t i=0; i<10; i++)
 	{
@@ -799,7 +799,7 @@ void ACELP_EncodeFrame(int16_t *speech, uint8_t *out)
 		q_lsp[0][i] = 0.25*q_lsp[3][i] + 0.75*q_lsp_prev[i];
 	}
 	
-	//interpolate unquantized LSP vector for subframes 4,3,2,1 (indexes are 3,2,1,0)
+	//interpolate unquantized LSP vector for subframes 4,3,2,1 (indices are 3,2,1,0)
 	//computed LSPs are used for subframe 4 (index 3)
 	memcpy(&lsp[3], lsp_this, 10*sizeof(float));
 	for(uint8_t i=0; i<10; i++)
