@@ -120,16 +120,22 @@ static void decode_sub(oa_dec_t *d, const int32_t a[11], int t, int frac, const 
         exc[n] = oa_sat32(u);
     }
 
-    int32_t *m = d->syn;                           /* m[0] = newest output */
+    /* synthesis on a linear buffer: y[0..9] = history (oldest first), y[10..69] = output */
+    int32_t y[10 + OA_L];
+    for (int i = 0; i < 10; i++)
+        y[9 - i] = d->syn[i];                      /* syn[0] = newest */
     for (int n = 0; n < OA_L; n++) {
+        int32_t *yn = &y[10 + n];
         int64_t acc = (int64_t)exc[n] * 8192;      /* 2u, Q4 * Q12 */
-        for (int i = 1; i <= 10; i++)
-            acc -= (int64_t)a[i] * m[i - 1];
-        int32_t y = oa_sat32(oa_rshr(acc, 12));
-        memmove(&m[1], &m[0], 9 * sizeof(int32_t));
-        m[0] = y;
-        pcm[n] = oa_sat16(oa_rshr(y, 4));
+        acc -= (int64_t)a[1] * yn[-1] + (int64_t)a[2] * yn[-2] + (int64_t)a[3] * yn[-3]
+             + (int64_t)a[4] * yn[-4] + (int64_t)a[5] * yn[-5] + (int64_t)a[6] * yn[-6]
+             + (int64_t)a[7] * yn[-7] + (int64_t)a[8] * yn[-8] + (int64_t)a[9] * yn[-9]
+             + (int64_t)a[10] * yn[-10];
+        *yn = oa_sat32(oa_rshr(acc, 12));
+        pcm[n] = oa_sat16(oa_rshr(*yn, 4));
     }
+    for (int i = 0; i < 10; i++)
+        d->syn[i] = y[10 + OA_L - 1 - i];
 
     /* shift the excitation history by one subframe */
     memmove(d->exc, &d->exc[OA_L], HIST * sizeof(int32_t));

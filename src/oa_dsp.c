@@ -157,14 +157,27 @@ void oa_weight_a(const int32_t a[11], const int16_t gpow_q15[11], int32_t out[11
     out[0] = 4096;
 }
 
+/* 10-tap recursive part of an all-pole filter: sum den[i] * y[-i], i = 1..10 */
+static inline int64_t ar10(const int32_t den[11], const int32_t *y)
+{
+    return (int64_t)den[1] * y[-1] + (int64_t)den[2] * y[-2] + (int64_t)den[3] * y[-3]
+         + (int64_t)den[4] * y[-4] + (int64_t)den[5] * y[-5] + (int64_t)den[6] * y[-6]
+         + (int64_t)den[7] * y[-7] + (int64_t)den[8] * y[-8] + (int64_t)den[9] * y[-9]
+         + (int64_t)den[10] * y[-10];
+}
+
 void oa_impulse(const int32_t *num, const int32_t den[11], int32_t h[OA_L])
 {
-    for (int n = 0; n < OA_L; n++) {
-        int64_t acc = num ? (n <= 10 ? (int64_t)num[n] * 4096 : 0) : (n == 0 ? (int64_t)4096 << 12 : 0);
-        for (int i = 1; i <= 10 && i <= n; i++)
+    /* first 11 samples: the input is non-zero and the history is incomplete */
+    for (int n = 0; n <= 10; n++) {
+        int64_t acc = num ? (int64_t)num[n] * 4096 : (n == 0 ? (int64_t)4096 * 4096 : 0);
+        for (int i = 1; i <= n; i++)
             acc -= (int64_t)den[i] * h[n - i];
         h[n] = oa_sat32(oa_rshr(acc, 12));
     }
+    /* steady state: pure recursion with a fixed 10-tap kernel */
+    for (int n = 11; n < OA_L; n++)
+        h[n] = oa_sat32(oa_rshr(-ar10(den, &h[n]), 12));
 }
 
 void oa_filter(const int32_t *num, const int32_t den[11], const int32_t *x, int32_t *y, int n,
@@ -210,9 +223,16 @@ void oa_pred_lt(int32_t *exc, int t, int frac)
     int off = t + (frac > 0 ? 1 : 0);
     for (int n = 0; n < OA_L; n++) {
         const int32_t *x = &exc[n - off + OA_INTERP_K0];
+        const int16_t *c = tap;
         int64_t acc = 0;
-        for (int k = 0; k < OA_INTERP_TAPS; k++)
-            acc += (int64_t)x[k] * tap[k];
+        for (int k = 0; k < OA_INTERP_TAPS / 4; k++) {   /* pointer walk, 4x unrolled */
+            acc += (int64_t)x[0] * c[0];
+            acc += (int64_t)x[1] * c[1];
+            acc += (int64_t)x[2] * c[2];
+            acc += (int64_t)x[3] * c[3];
+            x += 4;
+            c += 4;
+        }
         exc[n] = oa_sat32(oa_rshr(acc, 15));
     }
 }
@@ -227,15 +247,23 @@ void oa_pulse_positions(int p1, int p2, int p3, int p4, int shift, uint8_t pos[4
 
 void oa_build_code(const int32_t f[OA_L], const uint8_t pos[4], int sign_neg, int32_t c[OA_L])
 {
-    static const int16_t amp_q14[4] = { 23170, -16384, 16384, -16384 };  /* +1.4142, -1, +1, -1 */
     memset(c, 0, OA_L * sizeof(int32_t));
-    for (int p = 0; p < 4; p++) {
+    /* pulse 1: +1.4142 (Q14 23170) */
+    if (pos[0] < OA_L) {
+        int32_t a = sign_neg ? -23170 : 23170;
+        for (int n = pos[0]; n < OA_L; n++)
+            c[n] += (int32_t)oa_rshr((int64_t)a * f[n - pos[0]], 14);
+    }
+    /* pulses 2-4: -1, +1, -1; unit amplitudes need no multiply */
+    for (int p = 1; p < 4; p++) {
         int m = pos[p];
         if (m >= OA_L)
             continue;
-        int32_t a = sign_neg ? -amp_q14[p] : amp_q14[p];
-        for (int n = m; n < OA_L; n++)
-            c[n] += (int32_t)oa_rshr((int64_t)a * f[n - m], 14);
+        int neg = (p != 2) ^ (sign_neg != 0);
+        if (neg)
+            for (int n = m; n < OA_L; n++) c[n] -= f[n - m];
+        else
+            for (int n = m; n < OA_L; n++) c[n] += f[n - m];
     }
 }
 

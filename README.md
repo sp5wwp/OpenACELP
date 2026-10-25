@@ -11,8 +11,9 @@ out were confirmed by reading the reference and re-implemented. See
 - **Arithmetic:** fixed point throughout (int16/int32 data with 64-bit
   accumulators), C17, no libm, no dynamic allocation. State structs can be
   allocated statically: encoder 19.7 KB (16 KB of it search scratch), decoder 1.1 KB.
-- **Speed:** on x86-64, the encoder runs 1.4x and the decoder 2.4x faster than
-  the reference. Code size is about 19 KB.
+- **Speed:** the decoder needs about 85,000 instructions per 30 ms frame on a
+  Cortex-M4 (about 3 MIPS - measured on an emulated M4, `-O2`). On x86-64, the
+  encoder runs 1.4x and the decoder 3.3x faster than the reference.
 
 ## Tables
 
