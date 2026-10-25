@@ -24,6 +24,10 @@ make tetra-tables                    # downloads EN 300 395-2 from etsi.org, ver
 make tetra-tables ETSI_ZIP=file.zip  # or use a ZIP if you already have it
 ```
 
+The download uses `wget` (or `curl` if `wget` is missing). etsi.org has been
+seen to refuse `curl`. If it fails, the build prints the URL: fetch the ZIP in a
+browser and pass it with `ETSI_ZIP=`.
+
 This writes `build/tetra_tables.c`, which defines `oa_tables_tetra`. The file
 is git-ignored.
 

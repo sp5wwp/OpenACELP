@@ -69,7 +69,20 @@ $(ETSI_DIR)/$(ETSI_FILE):
 	@echo "Downloading ETSI EN 300 395-2 $(ETSI_VER) from etsi.org."
 	@echo "By continuing you accept ETSI's terms of use for this material."
 	mkdir -p $(ETSI_DIR)
-	curl -fL --retry 2 -o $@.part $(ETSI_URL)
+	@rm -f $@.part
+	@if command -v wget >/dev/null 2>&1; then \
+	  wget -O $@.part $(ETSI_URL); \
+	else \
+	  curl -fL --retry 2 -o $@.part $(ETSI_URL); \
+	fi || { \
+	  rm -f $@.part; \
+	  echo ""; \
+	  echo "Automatic download failed."; \
+	  echo "Download the file in a web browser from:"; \
+	  echo "  $(ETSI_URL)"; \
+	  echo "then run:"; \
+	  echo "  make tetra-tables ETSI_ZIP=/path/to/$(ETSI_FILE)"; \
+	  exit 1; }
 	mv $@.part $@
 
 $(ETSI_DIR)/.verified: $(ETSI_ZIP)
