@@ -28,7 +28,7 @@ This writes `build/tetra_tables.c`, which defines `oa_tables_tetra`. The file
 is git-ignored.
 
 >[!Warning]
-> **Do not commit the tables, and do not distribute binaries built with it!**
+> **Do not commit the tables, and do not distribute binaries built with them!**
 
 ## Build
 
