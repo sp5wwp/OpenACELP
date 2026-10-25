@@ -1,19 +1,72 @@
 # OpenACELP
-Free ACELP vocoder. It is based on **ETSI EN 300-395-2**<sup>[1]</sup> and **TIA/EIA IS-641**<sup>[2]</sup>, but it is **not** compatible with any of them (as their codebooks can't be published as a part of this codec). **OpenACELP** is an alternative to (great) [Codec 2](https://github.com/drowe67/codec2). It uses floating point arithmetic. I aim to optimize it for the STM32 Cortex-M7, as they have a hardware floating point unit (FPU).
 
-I'm using TED-LIUM release 1 ([OpenSLR link](http://www.openslr.org/7/), [download](https://projets-lium.univ-lemans.fr/ted-lium/release1/)) as the english speech corpus and [py-lbg](https://github.com/internaut/py-lbg) for codebook generation using Linde-Buzo-Gray (LBG) algorithm.
+A free, fixed-point ACELP speech codec that interoperates with the TETRA
+full-rate codec ([ETSI EN 300 395-2](https://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.03_60/en_30039502v010303p.pdf), 4567 bit/s, 137 bits per 30 ms frame).
+It contains no ETSI code. It was written from the standard's prose and
+checked against the ETSI reference executables. Two details the standard  leaves
+out were confirmed by reading the reference and re-implemented. See
+[TETRA_NOTES](docs/TETRA_NOTES.md) for where every detail comes from.
 
-**Actual phase:** **project stalled**.
+- **Encoder and decoder:** both included, with error concealment for lost frames.
+- **Arithmetic:** fixed point throughout (int16/int32 data with 64-bit
+  accumulators), C17, no libm, no dynamic allocation. State structs can be
+  allocated statically: encoder 19.7 KB (16 KB of it search scratch), decoder 1.1 KB.
+- **Speed:** on x86-64, the encoder runs 1.4x and the decoder 2.4x faster than
+  the reference. Code size is about 19 KB.
 
-Done:
-- speech framing and windowing (refer to [2], chapter 2.2.1)
-- autocorrelation parameters of the windowed speech, bandwidth expanded (equation 2.4 in [2])
-- Levinson-Durbin recursive solver for computing Linear Prediction (LP) filter coefficients ([2] - chapter 2.2.2)
-- conversion of LP coefficients to the LSPs (Line Spectral Pair) in the cosine domain ([2] - chapter 2.2.3)
-- Chebyshev polynomials generation for LSPs root search (LSP polynomial evaluation)
-- prepared test codebooks for LSP split-vector quantization (LSPs in the cosine domain). Refer to [1], chapter 4.2.2.3.
-- LSP codebooks full search
-- quantized and unquantized LSPs interpolation for each subframe
-- LSP->LP conversion
-- speech weighting filtering ([1] - chapter 4.2.2.4) - looks like it works
-- open-loop pitch search (T_O) - looks like it works too
+## Tables
+
+The codec needs two numeric tables, the LSP and gain codebooks. They are ETSI
+material, so they are not in this repository:
+
+```
+make tetra-tables                    # downloads EN 300 395-2 from etsi.org, verifies SHA-256
+make tetra-tables ETSI_ZIP=file.zip  # or use a ZIP if you already have it
+```
+
+This writes `build/tetra_tables.c`, which defines `oa_tables_tetra`. The file
+is git-ignored.
+
+>[!Warning]
+> **Do not commit the tables, and do not distribute binaries built with it!**
+
+## Build
+
+```
+make          # library build/libopenacelp.a + unit tests (no ETSI data needed)
+make test     # run unit tests
+make apps     # build/oa_encode, build/oa_decode (needs the tables)
+```
+
+`oa_encode in.raw out.ser` and `oa_decode in.ser out.raw` use raw 16-bit 8 kHz
+PCM and the ETSI test-file bitstream format (138 16-bit words per frame:
+BFI + 137 bits). With `-p` they use 18-byte packed frames.
+
+## API
+
+```c
+#include "openacelp.h"
+extern const oa_tables_t oa_tables_tetra;
+
+static oa_enc_t enc;  oa_enc_init(&enc, &oa_tables_tetra);
+static oa_dec_t dec;  oa_dec_init(&dec, &oa_tables_tetra);
+
+uint8_t bits[OA_FRAME_BITS];            /* 137 bits, one per byte */
+oa_enc_frame(&enc, pcm_in, bits);       /* 240 samples in */
+oa_dec_frame(&dec, bits, bfi, pcm_out);
+```
+
+## Interop testing
+
+`tests/interop.py <etsi-bin-dir> <speech.raw>...` compares OpenACELP with
+the ETSI executables, both on decoder output and with all four
+encoder/decoder pairings. The ETSI binaries are only run as test tools, see
+[TETRA_NOTES](docs/TETRA_NOTES.md) for how to build them.
+
+## Training your own codebooks
+
+`scripts/` holds tools for training non-ETSI LSP codebooks with [LBG](https://en.wikipedia.org/wiki/Linde%E2%80%93Buzo%E2%80%93Gray_algorithm) on a
+speech corpus, see its [readme file](scripts/README.md) for what they cover
+and what is still missing.
+
+License: GPL-3.0-or-later.
