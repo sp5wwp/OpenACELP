@@ -17,30 +17,27 @@ out were confirmed by reading the reference and re-implemented. See
 
 ## Tables
 
-The codec needs two numeric tables, the LSP and gain codebooks. They are ETSI
-material, so they are not in this repository:
+The codec needs two numeric tables, the LSP and gain codebooks. For TETRA
+interoperability their values must be those of EN 300 395-2. They are in
+[`src/oa_tables_tetra.c`](src/oa_tables_tetra.c), in OpenACELP's own arrays,
+names and comments: only the numbers come from the standard, no ETSI code or
+text.
+
+Maintainers can regenerate or check that file from the ETSI ZIP:
 
 ```
-make tetra-tables                    # downloads EN 300 395-2 from etsi.org, verifies SHA-256
-make tetra-tables ETSI_ZIP=file.zip  # or use a ZIP if you already have it
+make regen-tables ETSI_ZIP=path/to/en_30039502v010303p0.zip
 ```
 
-The download uses `wget` (or `curl` if `wget` is missing). etsi.org has been
-seen to refuse `curl`. If it fails, the build prints the URL: fetch the ZIP in a
-browser and pass it with `ETSI_ZIP=`.
-
-This writes `build/tetra_tables.c`, which defines `oa_tables_tetra`. The file
-is git-ignored.
-
->[!Warning]
-> **Do not commit the tables, and do not distribute binaries built with them!**
+It verifies the ZIP's SHA-256, then runs `tools/extract_etsi_tables.py`. The
+ZIP is available from [etsi.org](https://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.03_60/en_30039502v010303p0.zip).
 
 ## Build
 
 ```
-make          # library build/libopenacelp.a + unit tests (no ETSI data needed)
+make          # library build/libopenacelp.a + unit tests
 make test     # run unit tests
-make apps     # build/oa_encode, build/oa_decode (needs the tables)
+make apps     # build/oa_encode, build/oa_decode
 ```
 
 `oa_encode in.raw out.ser` and `oa_decode in.ser out.raw` use raw 16-bit 8 kHz
@@ -50,8 +47,7 @@ BFI + 137 bits). With `-p` they use 18-byte packed frames.
 ## API
 
 ```c
-#include "openacelp.h"
-extern const oa_tables_t oa_tables_tetra;
+#include "openacelp.h"     /* declares oa_tables_tetra */
 
 static oa_enc_t enc;  oa_enc_init(&enc, &oa_tables_tetra);
 static oa_dec_t dec;  oa_dec_init(&dec, &oa_tables_tetra);

@@ -5,8 +5,6 @@
 #include <string.h>
 #include "openacelp.h"
 
-extern const oa_tables_t oa_tables_tetra;
-
 int main(int argc, char **argv)
 {
     int packed = 0, a = 1;

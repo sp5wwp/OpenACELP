@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """OpenACELP float reference model of the TETRA (EN 300 395-2) speech decoder.
 
-Usage: tools/ref_decoder.py <build/tetra_tables.c> <in.ser> <out.raw>
+Usage: tools/ref_decoder.py <src/oa_tables_tetra.c> <in.ser> <out.raw>
 
 
 Written from the prose of EN 300 395-2 clause 4, plus behaviour established by
@@ -16,10 +16,10 @@ Q_INIT = np.array([30000, 26000, 21000, 15000, 8000, 0, -8000, -15000, -21000, -
 
 
 def load_tables(path):
-    t = open(path).read()
+    t = re.sub(r"/\*.*?\*/", " ", open(path).read(), flags=re.S)   # drop comments
     arr = {}
     for name in ["oa_tetra_lsp_cb1", "oa_tetra_lsp_cb2", "oa_tetra_lsp_cb3", "oa_tetra_gain_cb"]:
-        body = re.search(name + r"\[[^\]]*\] = \{(.*?)\};", t, re.S).group(1)
+        body = re.search(name + r"\[[^\]]*\]\s*=\s*\{(.*?)\};", t, re.S).group(1)
         arr[name] = np.array([int(v) for v in body.replace("\n", " ").split(",") if v.strip()], float)
     return (arr["oa_tetra_lsp_cb1"].reshape(-1, 3) / 32768, arr["oa_tetra_lsp_cb2"].reshape(-1, 3) / 32768,
             arr["oa_tetra_lsp_cb3"].reshape(-1, 4) / 32768, arr["oa_tetra_gain_cb"].reshape(-1, 2) / 256)

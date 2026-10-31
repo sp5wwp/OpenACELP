@@ -16,16 +16,19 @@ extern "C" {
 #define OA_FRAME_BYTES   18    /* 137 bits packed MSB first, last 7 bits zero */
 
 /*
- * Codebook tables. The codec ships without them: for TETRA interoperability
- * they are generated from the user's copy of ETSI EN 300 395-2 by
- * `make tetra-tables` (see build/tetra_tables.c, which defines oa_tables_tetra).
+ * Codebook tables.
  *   lsp1: 256 x 3, lsp2: 512 x 3, lsp3: 512 x 4   LSPs, cosine domain, Q15
  *   gain:  64 x 2                                 (R_pitch, R_code), log2 energy, Q8
+ * oa_tables_tetra (src/oa_tables_tetra.c) holds the codebooks for TETRA
+ * interoperability (EN 300 395-2).
  */
 typedef struct {
     const int16_t *lsp1, *lsp2, *lsp3;
     const int16_t *gain;
 } oa_tables_t;
+
+/* The TETRA codebooks */
+extern const oa_tables_t oa_tables_tetra;
 
 /* Decoded parameters of one frame */
 typedef struct {

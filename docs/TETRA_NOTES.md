@@ -8,8 +8,9 @@ implementation stays traceable.
 Sources used:
 
 - **Prose:** [EN 300 395-2 V1.3.3 (2025-02)](https://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.03_60/en_30039502v010303p.pdf), clause 4. Clause numbers below refer to it.
-- **Tables:** the two numeric tables `CLSP_334.TAB` and `ENER_QUA.TAB` from the
-  ETSI ZIP, extracted at build time (`make tetra-tables`) and never committed.
+- **Tables:** the numeric values of `CLSP_334.TAB` and `ENER_QUA.TAB` from the
+  ETSI ZIP, in OpenACELP's own arrays in `src/oa_tables_tetra.c`. They are
+  regenerated with `make regen-tables ETSI_ZIP=...`.
 - **Black-box testing:** ETSI's reference `scoder`/`sdecoder` were compiled locally and
   used as test oracles. Crafted bitstreams were fed to them and their output
   compared with ours. Findings that the prose does not state are marked

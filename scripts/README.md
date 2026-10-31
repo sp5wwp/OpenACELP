@@ -2,7 +2,7 @@
 
 These scripts are for training your own codebooks instead of using the ETSI
 tables. Codebooks you train yourself do **not** interoperate with TETRA: only
-the ETSI tables (`make tetra-tables`) do. They are useful for a free,
+the codebooks in `src/oa_tables_tetra.c` do. They are useful for a free,
 non-ETSI mode of the codec, or for experiments.
 
 | Script | Purpose |
