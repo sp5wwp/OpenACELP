@@ -3,17 +3,18 @@
 #include "openacelp.h"
 #include "oa_dsp.h"
 #include "oa_consts.h"
+#include "oa_xdec.h"
 #include <string.h>
 
 #define HIST   174                  /* excitation history kept before the subframe */
 #define SP0    10                   /* speech[] offset of the current frame */
 #define WSH    143                  /* weighted speech history */
 
-/* Largest pitch gain the encoder will select (Q14). Gains near the decoder's 1.2
- * clamp make the long-term predictor marginally stable, so small numeric
- * differences between decoder implementations grow on sustained tones. */
+/* Largest pitch gain the encoder will select (Q12; the decoder limits it to
+ * 1.2 = 4915). Gains near that limit make the long-term predictor marginally
+ * stable on sustained tones. */
 #ifndef OA_ENC_GP_LIMIT
-#define OA_ENC_GP_LIMIT OA_GP_MAX
+#define OA_ENC_GP_LIMIT OA_XGP_MAX
 #endif
 
 static const int16_t q_init[10] = { 30000, 26000, 21000, 15000, 8000, 0, -8000, -15000, -21000, -26000 };
@@ -138,7 +139,7 @@ static void lsp_quantize(const oa_tables_t *t, const int16_t lsp[10], uint16_t i
 {
     const int16_t *cb[3] = { t->lsp1, t->lsp2, t->lsp3 };
     static const int size[3] = { 256, 512, 512 }, dim[3] = { 3, 3, 4 }, off[3] = { 0, 3, 6 };
-    static const int16_t gap[3] = { 0, 917, 1245 };
+    static const int16_t gap[3] = { 0, OA_LSP_GAP_34, OA_LSP_GAP_67 };
     int16_t q[10];
     for (int s = 0; s < 3; s++) {
         int64_t best = INT64_MAX, best_any = INT64_MAX;
@@ -156,27 +157,14 @@ static void lsp_quantize(const oa_tables_t *t, const int16_t lsp[10], uint16_t i
             int16_t tq[10];
             memcpy(tq, q, off[s] * sizeof(int16_t));
             memcpy(&tq[off[s]], v, dim[s] * sizeof(int16_t));
-            if (s > 0) {                            /* boundary spreading as in the decoder */
-                int16_t *hi = &tq[off[s] - 1], *lo = &tq[off[s]];
-                int32_t d = gap[s] - (*hi - *lo);
-                if (d > 0) {
-                    d >>= 1;
-                    *hi = oa_sat16((int32_t)*hi + d);
-                    *lo = oa_sat16((int32_t)*lo - d);
-                }
-            }
+            if (s > 0)                              /* boundary spreading as in the decoder */
+                oa_lsp_spread(&tq[off[s] - 1], &tq[off[s]], gap[s]);
             if (ordered(tq, off[s] + dim[s])) { best = err; bi = i; }
         }
         idx[s] = (uint16_t)(bi >= 0 ? bi : bany);
         memcpy(&q[off[s]], &cb[s][idx[s] * dim[s]], dim[s] * sizeof(int16_t));
-        if (s > 0) {
-            int32_t d = gap[s] - (q[off[s] - 1] - q[off[s]]);
-            if (d > 0) {
-                d >>= 1;
-                q[off[s] - 1] = oa_sat16((int32_t)q[off[s] - 1] + d);
-                q[off[s]]     = oa_sat16((int32_t)q[off[s]] - d);
-            }
-        }
+        if (s > 0)
+            oa_lsp_spread(&q[off[s] - 1], &q[off[s]], gap[s]);
     }
 }
 
@@ -404,8 +392,11 @@ void oa_enc_frame(oa_enc_t *e, const int16_t pcm[OA_FRAME_SAMPLES], uint8_t bits
     int tmin = 20;
     for (int s = 0; s < 4; s++) {
         const int16_t *ss = &sp[s * OA_L];
+        int16_t a16[11];
         int32_t a[11], aw[11], h[OA_L], res[OA_L], x[OA_L], y[OA_L], dummy[10];
-        oa_lsp_to_a(qs[s], a);
+        oa_xlsp_to_a(qs[s], a16);                    /* the decoder's A(z), exactly */
+        for (int i = 0; i <= 10; i++)
+            a[i] = a16[i];
         oa_weight_a(a, oa_g085_q15, aw);
         oa_impulse(NULL, aw, h);
 
@@ -449,16 +440,21 @@ void oa_enc_frame(oa_enc_t *e, const int16_t pcm[OA_FRAME_SAMPLES], uint8_t bits
         /* re-derive the lag exactly as the decoder will */
         oa_pitch_decode(p.sub[s].pitch, s, tmin, &t, &frac);
 
+        /* the decoder's adaptive codebook vector, exactly; Q4 copy for the search */
+        int16_t *xexc = &e->xexc[OA_XHIST];
+        int16_t v16[OA_L];
+        oa_xpred_lt(xexc, t, frac);
+        memcpy(v16, xexc, sizeof(v16));
         int32_t v[OA_L];
-        oa_pred_lt(exc, t, frac);
-        memcpy(v, exc, sizeof(v));
+        for (int n = 0; n < OA_L; n++)
+            v[n] = v16[n] * 16;
         conv(v, h, y);
         int64_t xy = dot(x, y, OA_L), yy = dot(y, y, OA_L);
-        int64_t gp_u = (yy > 0 && xy > 0) ? (xy * 16384) / yy : 0;     /* Q14 */
-        if (gp_u > OA_GP_MAX) gp_u = OA_GP_MAX;
+        int64_t gp_u = (yy > 0 && xy > 0) ? (xy * 4096) / yy : 0;      /* Q12 */
+        if (gp_u > OA_XGP_MAX) gp_u = OA_XGP_MAX;
         int32_t x2[OA_L];
         for (int n = 0; n < OA_L; n++)
-            x2[n] = x[n] - (int32_t)oa_rshr(gp_u * y[n], 14);
+            x2[n] = x[n] - (int32_t)oa_rshr(gp_u * y[n], 12);
 
         /* algebraic codebook with shaping F(z) (and pitch sharpening) folded into h' */
         int32_t f[OA_L], hp[OA_L];
@@ -474,37 +470,31 @@ void oa_enc_frame(oa_enc_t *e, const int16_t pcm[OA_FRAME_SAMPLES], uint8_t bits
         p.sub[s].sign = (uint8_t)cd.sign;
         uint8_t pos[4];
         oa_pulse_positions(cd.idx[0], cd.idx[1], cd.idx[2], cd.idx[3], cd.shift, pos);
-        int32_t c[OA_L], z[OA_L];
-        oa_build_code(f, pos, cd.sign, c);
-        conv(c, h, z);                               /* Q12 */
 
-        /* gain VQ in the energy domain: exact decoder computation, weighted-error criterion */
-        int32_t lpg = oa_log2_pg(a);
-        uint64_t ev = 1u << 8, ec = 0;
-        for (int n = 0; n < OA_L; n++) {
-            ev += (uint64_t)((int64_t)v[n] * v[n]);
-            ec += (uint64_t)((int64_t)c[n] * c[n]);
-        }
-        int32_t Ea = oa_log2(ev, 8) + lpg, Ef = ec ? oa_log2(ec, 24) + lpg : 0;
-        int32_t pp, pc;
-        oa_energy_predict(e->e_pitch, e->e_code, &pp, &pc);
+        /* the decoder's code vector, exactly; z = filtered code vector in the scale of c */
+        int16_t c16[OA_L];
+        int32_t c[OA_L], z[OA_L];
+        oa_xcode(a16, t, pos, cd.sign, c16);
+        for (int n = 0; n < OA_L; n++)
+            c[n] = c16[n];
+        conv(c, h, z);
+
+        /* gain VQ: every entry goes through the decoder's own gain computation;
+         * criterion: weighted error of the resulting (Q4) excitation */
+        int32_t ea, ef;
+        oa_xgain_logs(a16, v16, c16, &ea, &ef);
         int64_t best_err = INT64_MAX;
         int best = 0;
-        int64_t bgp = 0, bgc = 0;
-        int32_t bEp = 0, bEc = 0;
+        int16_t bgp = 0, bgc = 0, bEp = 0, bEc = 0;
         for (int g = 0; g < 64; g++) {
-            int32_t Ep = pp + ((int32_t)e->tab->gain[2 * g] << 8);
-            int32_t Ec = pc + ((int32_t)e->tab->gain[2 * g + 1] << 8);
-            if (Ep > OA_EP_MAX) Ep = OA_EP_MAX;
-            if (Ec > OA_EC_MAX) Ec = OA_EC_MAX;
-            int64_t gp = oa_pow2((Ep + OA_K_REF - Ea) >> 1, 14);
-            if (gp > OA_GP_MAX) gp = OA_GP_MAX;
+            int16_t Ep, Ec, gp, gc;
+            oa_xgain_quant(e->e_pitch, e->e_code, e->tab->gain[2 * g], e->tab->gain[2 * g + 1], ea, ef,
+                           &Ep, &Ec, &gp, &gc);
             if (gp > OA_ENC_GP_LIMIT)
                 continue;
-            int64_t gc = ec ? oa_pow2((Ec + OA_K_REF - Ef) >> 1, 16) : 0;
             int64_t err = 0;
             for (int n = 0; n < OA_L; n++) {
-                int64_t r = x[n] - oa_rshr(gp * y[n], 14) - oa_rshr(gc * z[n], 24);
+                int64_t r = x[n] - oa_rshr((int64_t)gp * y[n], 12) - oa_rshr((int64_t)gc * z[n], 8);
                 err += r * r;
             }
             if (err < best_err) {
@@ -515,14 +505,16 @@ void oa_enc_frame(oa_enc_t *e, const int16_t pcm[OA_FRAME_SAMPLES], uint8_t bits
         e->e_pitch = bEp;
         e->e_code = bEc;
 
-        /* final excitation, weighted-error memory, history shift */
+        /* final excitation (exactly the decoder's), weighted-error memory, history shift */
+        oa_xexcite(v16, c16, bgp, bgc, xexc);
         for (int n = 0; n < OA_L; n++)
-            exc[n] = oa_sat32(oa_rshr(v[n] * bgp, 14) + oa_rshr(c[n] * bgc, 24));
+            exc[n] = xexc[n] * 16;
         for (int i = 0; i < 10; i++) {
             int n = OA_L - 1 - i;
-            e->werr[i] = oa_sat32(x[n] - oa_rshr(bgp * y[n], 14) - oa_rshr(bgc * z[n], 24));
+            e->werr[i] = oa_sat32(x[n] - oa_rshr((int64_t)bgp * y[n], 12) - oa_rshr((int64_t)bgc * z[n], 8));
         }
         memmove(e->exc, &e->exc[OA_L], HIST * sizeof(int32_t));
+        memmove(e->xexc, &e->xexc[OA_L], OA_XHIST * sizeof(int16_t));
     }
 
     memcpy(e->q_prev, q, sizeof(q));

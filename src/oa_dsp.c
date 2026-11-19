@@ -211,60 +211,12 @@ void oa_filter(const int32_t *num, const int32_t den[11], const int32_t *x, int3
 
 /* ---------------------------------------------------------------- codebooks */
 
-void oa_pred_lt(int32_t *exc, int t, int frac)
-{
-    if (frac == 0) {
-        for (int n = 0; n < OA_L; n++)
-            exc[n] = exc[n - t];
-        return;
-    }
-    /* lag t + frac/3: frac=+1 -> x0 = n-t-1, mu = 2/3 (row 1); frac=-1 -> x0 = n-t, mu = 1/3 (row 0) */
-    const int16_t *tap = &oa_interp_q15[(frac > 0 ? 1 : 0) * OA_INTERP_TAPS];
-    int off = t + (frac > 0 ? 1 : 0);
-    for (int n = 0; n < OA_L; n++) {
-        const int32_t *x = &exc[n - off + OA_INTERP_K0];
-        const int16_t *c = tap;
-        int64_t acc = 0;
-        for (int k = 0; k < OA_INTERP_TAPS / 4; k++) {   /* pointer walk, 4x unrolled */
-            acc += (int64_t)x[0] * c[0];
-            acc += (int64_t)x[1] * c[1];
-            acc += (int64_t)x[2] * c[2];
-            acc += (int64_t)x[3] * c[3];
-            x += 4;
-            c += 4;
-        }
-        exc[n] = oa_sat32(oa_rshr(acc, 15));
-    }
-}
-
 void oa_pulse_positions(int p1, int p2, int p3, int p4, int shift, uint8_t pos[4])
 {
     pos[0] = (uint8_t)(2 * p1 + shift);
     pos[1] = (uint8_t)(2 + 8 * p2 + shift);
     pos[2] = (uint8_t)(4 + 8 * p3 + shift);
     pos[3] = (uint8_t)(6 + 8 * p4 + shift);
-}
-
-void oa_build_code(const int32_t f[OA_L], const uint8_t pos[4], int sign_neg, int32_t c[OA_L])
-{
-    memset(c, 0, OA_L * sizeof(int32_t));
-    /* pulse 1: +1.4142 (Q14 23170) */
-    if (pos[0] < OA_L) {
-        int32_t a = sign_neg ? -23170 : 23170;
-        for (int n = pos[0]; n < OA_L; n++)
-            c[n] += (int32_t)oa_rshr((int64_t)a * f[n - pos[0]], 14);
-    }
-    /* pulses 2-4: -1, +1, -1; unit amplitudes need no multiply */
-    for (int p = 1; p < 4; p++) {
-        int m = pos[p];
-        if (m >= OA_L)
-            continue;
-        int neg = (p != 2) ^ (sign_neg != 0);
-        if (neg)
-            for (int n = m; n < OA_L; n++) c[n] -= f[n - m];
-        else
-            for (int n = m; n < OA_L; n++) c[n] += f[n - m];
-    }
 }
 
 void oa_shaping(const int32_t a[11], int t_int, int32_t f[OA_L])
@@ -305,12 +257,4 @@ void oa_pitch_decode(int idx, int subframe, int tmin, int *t, int *frac)
         *t = tmin + i;
         *frac = idx - 2 - 3 * i;
     }
-}
-
-void oa_energy_predict(int32_t ep_prev, int32_t ec_prev, int32_t *ep_pred, int32_t *ec_pred)
-{
-    int32_t p = ((2 * ep_prev + ec_prev) >> 2) - (3 << 16);
-    int32_t c = ((ep_prev + 2 * ec_prev) >> 2) - (3 << 16);
-    *ep_pred = p > 0 ? p : 0;
-    *ec_pred = c > 0 ? c : 0;
 }

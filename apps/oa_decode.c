@@ -29,7 +29,7 @@ int main(int argc, char **argv)
         } else {
             int16_t w[1 + OA_FRAME_BITS];
             if (fread(w, sizeof(int16_t), 1 + OA_FRAME_BITS, fi) != 1 + OA_FRAME_BITS) break;
-            bfi = w[0] & 1;
+            bfi = w[0] != 0;                     /* any nonzero indicator marks a bad frame */
             for (int i = 0; i < OA_FRAME_BITS; i++) bits[i] = w[1 + i] & 1;
         }
         oa_dec_frame(&dec, bits, bfi, pcm);

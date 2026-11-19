@@ -42,11 +42,11 @@ typedef struct {
 typedef struct {
     const oa_tables_t *tab;
     int16_t  q_prev[10];        /* previous quantized LSPs, Q15 */
-    int32_t  exc[234];          /* past excitation, Q4 */
-    int32_t  syn[10];           /* synthesis memory, output scale, Q4 */
-    int32_t  e_pitch, e_code;   /* quantized energies, Q16 log2 */
+    int16_t  exc[160 + 60];     /* past excitation and the current subframe */
+    int16_t  syn[10];           /* synthesis filter memory, oldest first */
+    int16_t  e_pitch, e_code;   /* quantized energies, log2, Q8 */
     int16_t  last_t;            /* last integer pitch lag */
-    uint8_t  have_last;
+    uint8_t  have_last;         /* a good frame has been decoded since init */
     oa_params_t last;           /* last good frame parameters */
 } oa_dec_t;
 
@@ -68,9 +68,10 @@ typedef struct {
     int32_t  a_old[11];         /* previous unquantized LP filter (Levinson fallback), Q24 */
     int32_t  wsp[143 + 240];    /* weighted speech: 143 history + frame, Q4 */
     int32_t  wmem_num[10], wmem_den[10];
-    int32_t  exc[234];          /* past excitation: 174 history + subframe, Q4 */
+    int32_t  exc[234];          /* past excitation: 174 history + subframe, Q4 (search) */
+    int16_t  xexc[160 + 60];    /* the decoder's excitation history, exactly */
     int32_t  werr[10];          /* weighted error memory, Q4 */
-    int32_t  e_pitch, e_code;   /* quantized energies, Q16 */
+    int16_t  e_pitch, e_code;   /* quantized energies, log2, Q8 (as in the decoder) */
     int32_t  phi[64 * 64];      /* scratch: algebraic codebook correlation matrix */
 } oa_enc_t;
 

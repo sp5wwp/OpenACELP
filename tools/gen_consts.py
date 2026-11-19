@@ -81,6 +81,12 @@ arr("oa_lag_window_q30", "int32_t", [q(x, 30) for x in lag])
 GRID = 120   # encoder-only; the spec uses 60, a finer grid separates close roots
 arr("oa_lsp_grid_q15", "int16_t", [max(-32767, min(32767, q(math.cos(math.pi * i / GRID), 15))) for i in range(GRID + 1)])
 w(f"#define OA_GRID_POINTS {GRID + 1}")
+
+# --- decoder (reference-exact) constants ---
+# The adaptive-codebook interpolation uses oa_interp_q15 above (taps rounded to Q15).
+# log2(1 + i/32) and 2^(i/32), 33 entries each, Q15 / Q14 (last capped to 32767)
+arr("oa_xlog2_tab", "int16_t", [min(32767, int(round(32767 * math.log2(1 + i / 32)))) for i in range(33)])
+arr("oa_xpow2_tab", "int16_t", [min(32767, int(round(16384 * 2 ** (i / 32)))) for i in range(33)])
 w("")
 w("#endif")
 
